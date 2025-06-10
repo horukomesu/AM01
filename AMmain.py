@@ -1,161 +1,127 @@
 """Main entry point for MyImageModelerPlugin.
 
-This script loads the Qt UI designed in ``AMUI.ui`` and wires user
-interactions to the calibration and utility modules.  It is intended to
-run inside Autodesk 3ds Max 2023+ but can also be executed as a
-standalone Python application for testing.
+Этот скрипт загружает Qt UI, созданный в ``AMUI.ui`` как QMainWindow, и вешает обработчики.
+Используется ТОЛЬКО внутри Autodesk 3ds Max 2023+.
 """
 
-from __future__ import annotations
-
-import sys
 from pathlib import Path
-from typing import List, Optional
-
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
-
-# Ensure the package directory is in sys.path so modules import correctly
-CURRENT_DIR = Path(__file__).resolve().parent
-if str(CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(CURRENT_DIR))
 
 import AMUtilities
 import AMCameraCalibrate
 
+# Держим ссылку глобально, чтобы окно не закрывалось сразу
+main_window = None
 
-class MainWindow(QtWidgets.QMainWindow):
-    """Main application window created from the Qt Designer UI."""
+def new_scene():
+    main_window.image_paths = []
+    main_window.images = []
+    main_window.MainTree.clear()
+    QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
-    def __init__(self, ui_path: Path) -> None:
-        super().__init__()
+def import_images():
+    paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+        main_window, "Select Images", "", "Images (*.png *.jpg *.jpeg *.tif)"
+    )
+    paths = AMUtilities.verify_paths(paths)
+    main_window.image_paths = paths
+    main_window.images = AMUtilities.load_images(paths)
+    main_window.MainTree.clear()
+    for p in main_window.image_paths:
+        QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(p).name])
+
+def save_scene():
+    path, _ = QtWidgets.QFileDialog.getSaveFileName(
+        main_window, "Save Scene", "", "JSON (*.json)"
+    )
+    if not path:
+        return
+    scene = {"images": getattr(main_window, "image_paths", [])}
+    AMUtilities.save_scene(scene, path)
+
+def save_scene_as():
+    save_scene()
+
+def load_scene():
+    path, _ = QtWidgets.QFileDialog.getOpenFileName(
+        main_window, "Load Scene", "", "JSON (*.json)"
+    )
+    if not path:
+        return
+    scene = AMUtilities.load_scene(path)
+    main_window.image_paths = scene.get("images", [])
+    main_window.images = AMUtilities.load_images(main_window.image_paths)
+    main_window.MainTree.clear()
+    for p in main_window.image_paths:
+        QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(p).name])
+
+def open_recent_project():
+    QtWidgets.QMessageBox.information(main_window, "Recent", "Recent projects not implemented.")
+
+def preferences():
+    QtWidgets.QMessageBox.information(main_window, "Preferences", "Preferences dialog not implemented.")
+
+def undo():
+    QtWidgets.QMessageBox.information(main_window, "Undo", "Undo not implemented.")
+
+def redo():
+    QtWidgets.QMessageBox.information(main_window, "Redo", "Redo not implemented.")
+
+def add_locator():
+    QtWidgets.QMessageBox.information(main_window, "Add Locator", "Create/Move marker not implemented.")
+
+def calibrate():
+    QtWidgets.QMessageBox.information(main_window, "Calibrate", "Calibration routine not implemented.")
+
+def define_worldspace():
+    QtWidgets.QMessageBox.information(main_window, "Worldspace", "Define worldspace not implemented.")
+
+def define_reference_distance():
+    QtWidgets.QMessageBox.information(main_window, "Reference Distance", "Define reference distance not implemented.")
+
+def add_modeling_locator():
+    QtWidgets.QMessageBox.information(main_window, "Modeling Locator", "Add modeling locator not implemented.")
+
+# -- Автозапуск окна при загрузке скрипта --
+try:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        raise RuntimeError("QApplication не найден. Скрипт должен запускаться внутри 3ds Max!")
+
+    if main_window is None:
+        ui_path = Path(__file__).with_name("AMUI.ui")
         loader = QtUiTools.QUiLoader()
-        loader.setWorkingDirectory(str(ui_path.parent))
         ui_file = QtCore.QFile(str(ui_path))
         ui_file.open(QtCore.QFile.ReadOnly)
-        self.ui = loader.load(ui_file, self)
+        main_window = loader.load(ui_file, None)
         ui_file.close()
-        self.setCentralWidget(self.ui)
 
-        # Connect toolbar buttons
-        self.ui.btnAddLoc.clicked.connect(self.add_locator)
-        self.ui.btnCalibrate.clicked.connect(self.calibrate)
-        self.ui.btnDFWS.clicked.connect(self.define_worldspace)
-        self.ui.btnDFMM.clicked.connect(self.define_reference_distance)
-        self.ui.btnLocMod.clicked.connect(self.add_modeling_locator)
+        # Инициализация служебных полей для сцены и изображений
+        main_window.image_paths = []
+        main_window.images = []
 
-        # Connect menu actions
-        self.ui.actionNEW.triggered.connect(self.new_scene)
-        self.ui.actionOpen.triggered.connect(self.load_scene)
-        self.ui.actionSave.triggered.connect(self.save_scene)
-        self.ui.actionSave_As.triggered.connect(self.save_scene_as)
-        self.ui.actionLoad.triggered.connect(self.import_images)
-        self.ui.actionRecent_Projects.triggered.connect(self.open_recent_project)
-        self.ui.actionPreferences.triggered.connect(self.preferences)
-        self.ui.actionUndo.triggered.connect(self.undo)
-        self.ui.actionRedo.triggered.connect(self.redo)
+        # Toolbar buttons
+        main_window.btnAddLoc.clicked.connect(add_locator)
+        main_window.btnCalibrate.clicked.connect(calibrate)
+        main_window.btnDFWS.clicked.connect(define_worldspace)
+        main_window.btnDFMM.clicked.connect(define_reference_distance)
+        main_window.btnLocMod.clicked.connect(add_modeling_locator)
 
-        self.image_paths: List[str] = []
-        self.images: List[QtGui.QImage] = []
+        # Menu actions
+        main_window.actionNEW.triggered.connect(new_scene)
+        main_window.actionOpen.triggered.connect(load_scene)
+        main_window.actionSave.triggered.connect(save_scene)
+        main_window.actionSave_As.triggered.connect(save_scene_as)
+        main_window.actionLoad.triggered.connect(import_images)
+        main_window.actionRecent_Projects.triggered.connect(open_recent_project)
+        main_window.actionPreferences.triggered.connect(preferences)
+        main_window.actionUndo.triggered.connect(undo)
+        main_window.actionRedo.triggered.connect(redo)
 
-    # ------------------------------------------------------------------
-    # File operations
-    # ------------------------------------------------------------------
-    def new_scene(self) -> None:
-        """Clear the current scene."""
-        self.image_paths.clear()
-        self.images.clear()
-        self.ui.MainTree.clear()
-        QtWidgets.QMessageBox.information(self, "New", "Started a new scene.")
+        main_window.setWindowTitle("AutoModeler")
+        main_window.resize(1200, 900)
+        main_window.show()
 
-    def import_images(self) -> None:
-        """Import images and populate the Scene Browser."""
-        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Select Images", "", "Images (*.png *.jpg *.jpeg *.tif)"
-        )
-        paths = AMUtilities.verify_paths(paths)
-        self.image_paths = paths
-        self.images = AMUtilities.load_images(paths)
-        self.ui.MainTree.clear()
-        for p in self.image_paths:
-            QtWidgets.QTreeWidgetItem(self.ui.MainTree, [Path(p).name])
-
-    def save_scene(self) -> None:
-        """Save current scene to JSON."""
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Scene", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        scene = {"images": self.image_paths}
-        AMUtilities.save_scene(scene, path)
-
-    def save_scene_as(self) -> None:
-        """Save scene using Save As."""
-        self.save_scene()
-
-    def load_scene(self) -> None:
-        """Load scene from JSON."""
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load Scene", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        scene = AMUtilities.load_scene(path)
-        self.image_paths = scene.get("images", [])
-        self.images = AMUtilities.load_images(self.image_paths)
-        self.ui.MainTree.clear()
-        for p in self.image_paths:
-            QtWidgets.QTreeWidgetItem(self.ui.MainTree, [Path(p).name])
-
-    def open_recent_project(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Recent", "Recent projects not implemented.")
-
-    # ------------------------------------------------------------------
-    # Edit operations
-    # ------------------------------------------------------------------
-    def preferences(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Preferences", "Preferences dialog not implemented.")
-
-    def undo(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Undo", "Undo not implemented.")
-
-    def redo(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Redo", "Redo not implemented.")
-
-    # ------------------------------------------------------------------
-    # Toolbar / workflow actions
-    # ------------------------------------------------------------------
-    def add_locator(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Add Locator", "Create/Move marker not implemented.")
-
-    def calibrate(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Calibrate", "Calibration routine not implemented.")
-
-    def define_worldspace(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Worldspace", "Define worldspace not implemented.")
-
-    def define_reference_distance(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Reference Distance", "Define reference distance not implemented.")
-
-    def add_modeling_locator(self) -> None:
-        QtWidgets.QMessageBox.information(self, "Modeling Locator", "Add modeling locator not implemented.")
-
-
-def run() -> None:
-    """Entry point to launch the application."""
-    app = QtWidgets.QApplication.instance()
-    own_app = False
-    if app is None:
-        app = QtWidgets.QApplication(sys.argv)
-        own_app = True
-
-    ui_path = Path(__file__).with_name("AMUI.ui")
-    window = MainWindow(ui_path)
-    window.show()
-
-    if own_app:
-        app.exec_()
-
-
-if __name__ == "__main__":
-    run()
+except Exception as e:
+    import traceback
+    QtWidgets.QMessageBox.critical(None, "AutoModeler Error", f"Ошибка запуска:\n{traceback.format_exc()}")

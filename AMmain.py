@@ -421,7 +421,7 @@ def calibrate():
 
     calibrator = CameraCalibrator()
     try:
-        calibrator.load_tracks(tracks, image_shapes)
+        calibrator.load_tracks(tracks, main_window.image_paths)
         calibrator.reconstruct()
     except Exception as exc:
         QtWidgets.QMessageBox.critical(

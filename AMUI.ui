@@ -557,7 +557,7 @@
   <widget class="QDockWidget" name="dockWidget_4">
    <property name="minimumSize">
     <size>
-     <width>306</width>
+     <width>399</width>
      <height>70</height>
     </size>
    </property>
@@ -721,11 +721,18 @@
           </property>
           <property name="sizeHint" stdset="0">
            <size>
-            <width>830</width>
+            <width>737</width>
             <height>29</height>
            </size>
           </property>
          </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnMoveToScene">
+          <property name="text">
+           <string>Move To Scene</string>
+          </property>
+         </widget>
         </item>
        </layout>
       </widget>

@@ -6,11 +6,21 @@
 
 from pathlib import Path
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
+import numpy as np
+import importlib
 
 import AMUtilities
-import numpy as np
+importlib.reload(AMUtilities)
 
+
+import AMCalibrationPlotter
+importlib.reload(AMCalibrationPlotter)
+
+import CameraCalibrator
+importlib.reload(CameraCalibrator)
 from CameraCalibrator import CameraCalibrator
+
+
 # Держим ссылку глобально, чтобы окно не закрывалось сразу
 main_window = None
 
@@ -310,11 +320,12 @@ def save_scene():
     )
     if not path:
         return
-    scene = {
-        "images": getattr(main_window, "image_paths", []),
-        "locators": getattr(main_window, "locators", []),
-    }
-    AMUtilities.save_scene(scene, path)
+    AMUtilities.save_scene(
+        main_window.image_paths,
+        main_window.locators,
+        path
+    )
+
 
 def save_scene_as():
     save_scene()
@@ -327,9 +338,9 @@ def load_scene():
     if not path:
         return
     scene = AMUtilities.load_scene(path)
-    main_window.image_paths = scene.get("images", [])
+    main_window.image_paths = scene["images"]
     main_window.images = AMUtilities.load_images(main_window.image_paths)
-    main_window.locators = scene.get("locators", [])
+    main_window.locators = scene["locators"]
     main_window.selected_locator = None
     update_tree()
     if main_window.images:
@@ -337,6 +348,7 @@ def load_scene():
     else:
         main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
         main_window.viewer.set_markers([])
+
 
 def open_recent_project():
     QtWidgets.QMessageBox.information(main_window, "Recent", "Recent projects not implemented.")
@@ -415,7 +427,6 @@ def calibrate():
             main_window, "Calibrate", f"Calibration failed:\n{exc}"
         )
         return
-
     main_window.calibration = calibrator
     error = calibrator.get_reprojection_error() if hasattr(calibrator, "get_reprojection_error") else None
     msg = (
@@ -426,6 +437,38 @@ def calibrate():
         msg += f"\nReprojection error: {error:.4f}"
 
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
+
+def move_to_scene():
+    if not hasattr(main_window, "calibration") or main_window.calibration is None:
+        QtWidgets.QMessageBox.warning(
+            main_window, "Move to Scene", "No calibration result found. Run calibration first."
+        )
+        return
+    if not getattr(main_window, "image_paths", []):
+        QtWidgets.QMessageBox.warning(
+            main_window, "Move to Scene", "No images loaded."
+        )
+        return
+    if not getattr(main_window, "locators", []):
+        QtWidgets.QMessageBox.warning(
+            main_window, "Move to Scene", "No locators found."
+        )
+        return
+
+    try:
+        AMCalibrationPlotter.plot_calibration_results(
+            calibrator=main_window.calibration,
+            locator_names=[loc["name"] for loc in main_window.locators],
+            image_paths=main_window.image_paths
+        )
+    except Exception as exc:
+        import traceback
+        QtWidgets.QMessageBox.critical(
+            main_window, "Move to Scene",
+            f"Visualization failed:\n{exc}\n{traceback.format_exc()}"
+        )
+
+
 
 
 def define_worldspace():
@@ -500,6 +543,7 @@ try:
         main_window.btnDFWS.clicked.connect(define_worldspace)
         main_window.btnDFMM.clicked.connect(define_reference_distance)
         main_window.btnLocMod.clicked.connect(add_modeling_locator)
+        main_window.btnMoveToScene.clicked.connect(move_to_scene)
 
         # Menu actions
         main_window.actionNEW.triggered.connect(new_scene)

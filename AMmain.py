@@ -20,6 +20,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
     """Interactive viewer placed inside ``MainFrame``."""
 
     locator_added = QtCore.Signal(float, float)
+    navigate = QtCore.Signal(int)  # emit +1/-1 to switch images
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -28,17 +29,39 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.scene().addItem(self._pixmap)
         self.mark_items = []
 
-        self.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform)
+        self.setRenderHints(
+            QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform
+        )
         self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
+
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.NoAnchor)
+        self.setResizeAnchor(QtWidgets.QGraphicsView.NoAnchor)
 
         self._panning = False
         self._pan_start = QtCore.QPoint()
         self.adding_locator = False
+        self.zoom_step = 1.2
 
-    def load_image(self, qimg: QtGui.QImage):
+        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_action_menu)
+
+        self._action_menu = None
+
+    def load_image(self, qimg: QtGui.QImage, keep_transform: bool = False):
+        current_transform = self.transform()
+        h_val = self.horizontalScrollBar().value()
+        v_val = self.verticalScrollBar().value()
+
         self.scene().setSceneRect(0, 0, qimg.width(), qimg.height())
         self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimg))
-        self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
+
+        if keep_transform:
+            self.setTransform(current_transform)
+            self.horizontalScrollBar().setValue(h_val)
+            self.verticalScrollBar().setValue(v_val)
+        else:
+            self.resetTransform()
+            self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
 
     def set_markers(self, markers, highlight_name=None):
         for item in self.mark_items:
@@ -74,37 +97,65 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.locator_added.emit(x_norm, y_norm)
             return
 
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MiddleButton:
             self._panning = True
             self._pan_start = event.pos()
             self.setCursor(QtCore.Qt.ClosedHandCursor)
-        super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._panning:
             delta = event.pos() - self._pan_start
             self._pan_start = event.pos()
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-        super().mouseMoveEvent(event)
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - delta.x()
+            )
+            self.verticalScrollBar().setValue(
+                self.verticalScrollBar().value() - delta.y()
+            )
+        else:
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton and self._panning:
+        if event.button() == QtCore.Qt.MiddleButton and self._panning:
             self._panning = False
             self.setCursor(QtCore.Qt.ArrowCursor)
-        super().mouseReleaseEvent(event)
+        else:
+            super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
         if event.modifiers() & QtCore.Qt.ControlModifier:
-            factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-            self.scale(factor, factor)
-        else:
-            super().wheelEvent(event)
+            step = 1 if event.angleDelta().y() > 0 else -1
+            self.navigate.emit(step)
+            return
+
+        old_pos = self.mapToScene(event.pos())
+        zoom_out = event.angleDelta().y() < 0
+        factor = 1.0 / self.zoom_step if zoom_out else self.zoom_step
+        self.scale(factor, factor)
+        new_pos = self.mapToScene(event.pos())
+        delta = new_pos - old_pos
+        self.translate(delta.x(), delta.y())
 
     def mouseDoubleClickEvent(self, event):
         if self._pixmap.pixmap() and not self._pixmap.pixmap().isNull():
             self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
         super().mouseDoubleClickEvent(event)
+
+    def _show_action_menu(self, pos):
+        if self._action_menu is None:
+            self._action_menu = QtWidgets.QMenu(self)
+            self._action_menu.addAction("Add Locator", add_locator)
+            self._action_menu.addAction("Calibrate", calibrate)
+            self._action_menu.addAction("Define Worldspace", define_worldspace)
+            self._action_menu.addAction(
+                "Define Reference Distance", define_reference_distance
+            )
+            self._action_menu.addAction(
+                "Add Modeling Locator", add_modeling_locator
+            )
+        self._action_menu.exec_(self.mapToGlobal(pos))
 
 
 def get_image_markers(index: int):
@@ -146,12 +197,24 @@ def exit_locator_mode():
     main_window.viewer.setCursor(QtCore.Qt.ArrowCursor)
 
 
-def show_image(index: int):
+def show_image(index: int, keep_view: bool = False):
     if 0 <= index < len(main_window.images):
         main_window.current_image_index = index
-        main_window.viewer.load_image(main_window.images[index])
+        main_window.viewer.load_image(main_window.images[index], keep_transform=keep_view)
         highlight = getattr(main_window, "selected_locator", None)
         main_window.viewer.set_markers(get_image_markers(index), highlight)
+
+
+def next_image():
+    idx = getattr(main_window, "current_image_index", 0) + 1
+    if idx < len(main_window.images):
+        show_image(idx, keep_view=True)
+
+
+def prev_image():
+    idx = getattr(main_window, "current_image_index", 0) - 1
+    if idx >= 0:
+        show_image(idx, keep_view=True)
 
 
 def on_tree_selection_changed(current, _previous):
@@ -165,7 +228,7 @@ def on_tree_selection_changed(current, _previous):
         show_image(data[1])
     elif data[0] == "locator":
         main_window.selected_locator = data[1]
-        show_image(getattr(main_window, "current_image_index", 0))
+        show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
 
 def delete_selected_locator():
@@ -180,7 +243,7 @@ def delete_selected_locator():
     if main_window.selected_locator == name:
         main_window.selected_locator = None
     update_tree()
-    show_image(getattr(main_window, "current_image_index", 0))
+    show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
 
 def on_locator_added(x_norm: float, y_norm: float):
@@ -192,7 +255,7 @@ def on_locator_added(x_norm: float, y_norm: float):
         return
     loc.setdefault("positions", {})[idx] = {"x": x_norm, "y": y_norm}
     update_tree()
-    show_image(idx)
+    show_image(idx, keep_view=True)
 
 
 
@@ -371,6 +434,9 @@ try:
         layout.setContentsMargins(0, 0, 0, 0)
         main_window.viewer = ImageViewer(main_window.MainFrame)
         main_window.viewer.locator_added.connect(on_locator_added)
+        main_window.viewer.navigate.connect(
+            lambda step: (next_image() if step > 0 else prev_image())
+        )
         layout.addWidget(main_window.viewer)
 
         # Tree selection and delete key
@@ -395,6 +461,9 @@ try:
 
         main_window._esc_filter = _EscFilter(main_window.viewer)
         main_window.viewer.installEventFilter(main_window._esc_filter)
+
+        QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Right), main_window, next_image)
+        QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Left), main_window, prev_image)
 
         # Toolbar buttons
         main_window.btnAddLoc.clicked.connect(add_locator)

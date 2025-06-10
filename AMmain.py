@@ -400,8 +400,8 @@ def calibrate():
         (img.height(), img.width()) for img in getattr(main_window, "images", [])
     ]
 
-    # Собираем matches в формате: список словарей {camera_idx: (x_px, y_px), ...}
-    matches = []
+    # Собираем треки: список словарей {camera_idx: (x_px, y_px), ...}
+    tracks = []
     for loc in main_window.locators:
         track = {}
         for idx, pos in loc.get("positions", {}).items():
@@ -411,9 +411,9 @@ def calibrate():
             h = image_shapes[idx][0]
             track[idx] = (pos["x"] * w, pos["y"] * h)
         if track:
-            matches.append(track)
+            tracks.append(track)
 
-    if len(matches) < 2:
+    if len(tracks) < 2:
         QtWidgets.QMessageBox.warning(
             main_window, "Calibrate", "Not enough locators to compute calibration."
         )
@@ -421,14 +421,16 @@ def calibrate():
 
     calibrator = CameraCalibrator()
     try:
-        calibrator.calibrate(matches, image_shapes)
+        calibrator.load_tracks(tracks, image_shapes)
+        calibrator.reconstruct()
     except Exception as exc:
         QtWidgets.QMessageBox.critical(
             main_window, "Calibrate", f"Calibration failed:\n{exc}"
         )
         return
+
     main_window.calibration = calibrator
-    error = calibrator.get_reprojection_error() if hasattr(calibrator, "get_reprojection_error") else None
+    error = calibrator.get_reprojection_error()
     msg = (
         f"Recovered {len(calibrator.get_camera_parameters())} cameras.\n"
         f"3D points: {len(calibrator.get_points_3d())}"
@@ -437,6 +439,9 @@ def calibrate():
         msg += f"\nReprojection error: {error:.4f}"
 
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
+
+
+
 
 def move_to_scene():
     if not hasattr(main_window, "calibration") or main_window.calibration is None:
@@ -456,16 +461,20 @@ def move_to_scene():
         return
 
     try:
-        AMCalibrationPlotter.plot_calibration_results(
+        AMUtilities.export_calibration_to_max(
             calibrator=main_window.calibration,
+            image_paths=main_window.image_paths,
             locator_names=[loc["name"] for loc in main_window.locators],
-            image_paths=main_window.image_paths
+            sensor_width_mm=36.0  # или другой, если ты хочешь поддерживать crop
+        )
+        QtWidgets.QMessageBox.information(
+            main_window, "Move to Scene", "Exported cameras and locators to 3ds Max scene."
         )
     except Exception as exc:
         import traceback
         QtWidgets.QMessageBox.critical(
             main_window, "Move to Scene",
-            f"Visualization failed:\n{exc}\n{traceback.format_exc()}"
+            f"Export failed:\n{exc}\n{traceback.format_exc()}"
         )
 
 

@@ -16,6 +16,7 @@ from typing import List, Dict, Any
 import math
 import numpy as np
 
+
 from CameraCalibrator import CameraCalibrator
 
 from PySide2 import QtGui
@@ -117,48 +118,48 @@ def verify_paths(paths: List[str]) -> List[str]:
     return [p for p in paths if Path(p).exists()]
 
 def export_calibration_to_max(
-    calibrator: CameraCalibrator,
-    image_paths: List[str],
-    locator_names: List[str],
+    calibrator,
+    image_paths,
+    locator_names,
     sensor_width_mm: float = 36.0,
-) -> None:
-    """Create cameras and dummies in the active 3ds Max scene.
-
-    Parameters
-    ----------
-    calibrator : CameraCalibrator
-        Calibrator containing recovered cameras and 3D points.
-    image_paths : List[str]
-        List of image paths corresponding to cameras. Used for naming.
-    locator_names : List[str]
-        Names of locators that correspond to the ``matches`` passed to
-        :meth:`CameraCalibrator.calibrate`.
-    sensor_width_mm : float, optional
-        Sensor width in millimeters, by default ``36.0``.
+):
     """
+    Экспортирует камеры и локаторы в текущую сцену 3ds Max (через pymxs).
 
+    calibrator: CameraCalibrator (твой новый класс, SelfCalibratingSfM)
+    image_paths: список путей к изображениям (для имён камер)
+    locator_names: имена локаторов (для dummy)
+    sensor_width_mm: ширина сенсора для пересчёта фокусного (по умолчанию 36 мм)
+    """
     import pymxs
+    import numpy as np
+    from pathlib import Path
+    import math
 
     rt = pymxs.runtime
 
-    # Перевод системы координат из OpenCV (Y-down) в 3ds Max (Z-up)
-    axes = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+    # OpenCV → 3ds Max (Y-down → Z-up)
+    axes = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, -1.0, 0.0]
+    ])
 
     cams = calibrator.get_camera_parameters()
     K = calibrator.get_camera_intrinsics()
-    shapes = calibrator.get_image_shapes()
+    shapes = getattr(calibrator, "image_shapes", None)
+
+    def as_float_tuple(arr):
+        return float(arr[0]), float(arr[1]), float(arr[2])
 
     for idx, cam in enumerate(cams):
         if cam.center is None or cam.rotation is None:
             continue
         name = Path(image_paths[idx]).stem if idx < len(image_paths) else f"cam{idx}"
 
+        # Переводим координаты и ориентацию камеры из OpenCV в Max
         pos = axes @ cam.center.reshape(3)
         rot = axes @ cam.rotation.T
-
-        # Явно конвертируем к float!
-        def as_float_tuple(arr):
-            return float(arr[0]), float(arr[1]), float(arr[2])
 
         tm = rt.Matrix3(
             rt.Point3(*as_float_tuple(rot[:, 0])),
@@ -170,18 +171,25 @@ def export_calibration_to_max(
         node.name = name
         node.transform = tm
 
-        if K is not None and idx < len(shapes):
-            width_px = shapes[idx][1]
+        # Пересчёт focal length (focal_px → focal_mm) → FOV
+        if K is not None and idx < len(cams):
+            width_px = shapes[idx][1] if shapes is not None else None
             fx = float(K[0, 0])
-            focal_mm = fx / width_px * sensor_width_mm
-            try:
-                node.fov = 2 * math.atan(sensor_width_mm / (2 * focal_mm))
-            except AttributeError:
-                pass
+            if width_px:
+                # focal_mm = fx / width_px * sensor_width_mm
+                try:
+                    # В 3ds Max fov задаётся в радианах!
+                    focal_mm = fx / width_px * sensor_width_mm
+                    node.fov = 2 * math.atan(sensor_width_mm / (2 * focal_mm))
+                except Exception:
+                    pass
 
-    for name, pt in calibrator.get_named_points_3d(locator_names):
+    # Экспортируем локаторы как Dummy
+    point_3d_list = calibrator.get_points_3d()
+    for name, pt in zip(locator_names, point_3d_list):
         pos = axes @ pt.reshape(3)
         dummy = rt.Dummy()
         dummy.name = name
         dummy.position = rt.Point3(*as_float_tuple(pos))
+
 

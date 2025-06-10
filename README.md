@@ -5,7 +5,11 @@ This repository contains a prototype image-based camera calibration and export t
 ## Modules
 
 - `AMmain.py` - Entry point and Qt-based UI integration.
-- `AMCameraCalibrate.py` - Core calibration logic built on OpenCV.
+- `AMCameraCalibrate.py` - Legacy chessboard calibration routines.
+- `CameraCalibrator.py` - Standalone structure-from-motion module for
+  recovering camera poses and 3D points using only 2D tracks. `AMmain.py`
+  integrates this module so that pressing the **Calibrate** button uses
+  locator marks to estimate camera poses and 3D points.
 - `AMUtilities.py` - Helper utilities for loading images and saving scenes.
 - `AMUI.ui` - Qt Designer UI file.
 

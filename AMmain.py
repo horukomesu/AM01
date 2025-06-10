@@ -382,47 +382,18 @@ def add_locator():
 
 
 def calibrate():
-    """Калибровка камер через photogrammetry-методы (по локаторам)."""
+    """Automatic calibration using pycolmap."""
     if not getattr(main_window, "image_paths", []):
         QtWidgets.QMessageBox.warning(
             main_window, "Calibrate", "No images loaded for calibration."
         )
         return
 
-    if not getattr(main_window, "locators", []):
-        QtWidgets.QMessageBox.warning(
-            main_window, "Calibrate", "No locators placed for calibration."
-        )
-        return
-
-    # Собираем размеры изображений
-    image_shapes = [
-        (img.height(), img.width()) for img in getattr(main_window, "images", [])
-    ]
-
-    # Собираем треки: список словарей {camera_idx: (x_px, y_px), ...}
-    tracks = []
-    for loc in main_window.locators:
-        track = {}
-        for idx, pos in loc.get("positions", {}).items():
-            if idx >= len(image_shapes):
-                continue
-            w = image_shapes[idx][1]
-            h = image_shapes[idx][0]
-            track[idx] = (pos["x"] * w, pos["y"] * h)
-        if track:
-            tracks.append(track)
-
-    if len(tracks) < 2:
-        QtWidgets.QMessageBox.warning(
-            main_window, "Calibrate", "Not enough locators to compute calibration."
-        )
-        return
-
     calibrator = CameraCalibrator()
     try:
-        calibrator.load_tracks(tracks, main_window.image_paths)
-        calibrator.reconstruct()
+        calibrator.load_images(main_window.image_paths)
+        calibrator.detect_and_match_features()
+        calibrator.run_reconstruction()
     except Exception as exc:
         QtWidgets.QMessageBox.critical(
             main_window, "Calibrate", f"Calibration failed:\n{exc}"
@@ -454,17 +425,11 @@ def move_to_scene():
             main_window, "Move to Scene", "No images loaded."
         )
         return
-    if not getattr(main_window, "locators", []):
-        QtWidgets.QMessageBox.warning(
-            main_window, "Move to Scene", "No locators found."
-        )
-        return
-
     try:
         AMUtilities.export_calibration_to_max(
             calibrator=main_window.calibration,
             image_paths=main_window.image_paths,
-            locator_names=[loc["name"] for loc in main_window.locators],
+            locator_names=[f"pt{i}" for i in range(len(main_window.calibration.get_points_3d()))],
             sensor_width_mm=36.0  # или другой, если ты хочешь поддерживать crop
         )
         QtWidgets.QMessageBox.information(

@@ -186,7 +186,10 @@ def export_calibration_to_max(
 
     # Экспортируем локаторы как Dummy
     point_3d_list = calibrator.get_points_3d()
-    for name, pt in zip(locator_names, point_3d_list):
+    names = list(locator_names)
+    if len(names) < len(point_3d_list):
+        names += [f"pt{i}" for i in range(len(names), len(point_3d_list))]
+    for name, pt in zip(names, point_3d_list):
         pos = axes @ pt.reshape(3)
         dummy = rt.Dummy()
         dummy.name = name

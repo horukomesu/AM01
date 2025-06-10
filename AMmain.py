@@ -15,6 +15,12 @@ from typing import List
 
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
 
+
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
+
 import AMUtilities
 import AMCameraCalibrate
 

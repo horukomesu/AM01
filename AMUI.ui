@@ -594,7 +594,7 @@
        </property>
        <layout class="QHBoxLayout" name="horizontalLayout_3">
         <item>
-         <widget class="QPushButton" name="pushButton_4">
+         <widget class="QPushButton" name="btnAddLoc">
           <property name="toolTip">
            <string>CreateMove Marker</string>
           </property>
@@ -617,7 +617,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="pushButton_3">
+         <widget class="QPushButton" name="btnCalibrate">
           <property name="toolTip">
            <string>Calibrate</string>
           </property>
@@ -643,7 +643,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="pushButton_5">
+         <widget class="QPushButton" name="btnDFWS">
           <property name="toolTip">
            <string>Define Worldspace</string>
           </property>
@@ -669,7 +669,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="pushButton_6">
+         <widget class="QPushButton" name="btnDFMM">
           <property name="toolTip">
            <string>Define Reference Distance</string>
           </property>
@@ -692,7 +692,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="pushButton_7">
+         <widget class="QPushButton" name="btnLocMod">
           <property name="toolTip">
            <string>Add Modeling Locator</string>
           </property>
@@ -758,7 +758,7 @@
    <widget class="QWidget" name="dockWidgetContents_6">
     <layout class="QVBoxLayout" name="verticalLayout">
      <item>
-      <widget class="QTreeWidget" name="treeWidget">
+      <widget class="QTreeWidget" name="MainTree">
        <property name="maximumSize">
         <size>
          <width>16777215</width>
@@ -773,7 +773,7 @@
       </widget>
      </item>
      <item>
-      <widget class="QFrame" name="frame_2">
+      <widget class="QFrame" name="FrameDetails">
        <property name="frameShape">
         <enum>QFrame::Shape::StyledPanel</enum>
        </property>

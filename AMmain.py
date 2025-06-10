@@ -15,10 +15,171 @@ import cv2
 # Держим ссылку глобально, чтобы окно не закрывалось сразу
 main_window = None
 
+
+class ImageViewer(QtWidgets.QGraphicsView):
+    """Interactive viewer placed inside ``MainFrame``."""
+
+    locator_added = QtCore.Signal(float, float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setScene(QtWidgets.QGraphicsScene(self))
+        self._pixmap = QtWidgets.QGraphicsPixmapItem()
+        self.scene().addItem(self._pixmap)
+        self.mark_items = []
+
+        self.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform)
+        self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
+
+        self._panning = False
+        self._pan_start = QtCore.QPoint()
+        self.adding_locator = False
+
+    def load_image(self, qimg: QtGui.QImage):
+        self.scene().setSceneRect(0, 0, qimg.width(), qimg.height())
+        self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimg))
+        self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
+
+    def set_markers(self, markers):
+        for item in self.mark_items:
+            self.scene().removeItem(item)
+        self.mark_items = []
+        for m in markers:
+            self._add_marker_item(m["x"], m["y"], m.get("name", ""))
+
+    def _add_marker_item(self, x_norm: float, y_norm: float, name: str):
+        rect = QtCore.QRectF(-5, -5, 10, 10)
+        item = QtWidgets.QGraphicsEllipseItem(rect)
+        item.setBrush(QtGui.QBrush(QtCore.Qt.red))
+        item.setPen(QtGui.QPen(QtCore.Qt.black))
+        pos = QtCore.QPointF(x_norm * self.sceneRect().width(), y_norm * self.sceneRect().height())
+        item.setPos(pos)
+        item.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        self.scene().addItem(item)
+        text = QtWidgets.QGraphicsSimpleTextItem(name)
+        text.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        text.setPos(pos + QtCore.QPointF(6, -6))
+        self.scene().addItem(text)
+        self.mark_items.append(item)
+        self.mark_items.append(text)
+
+    def mousePressEvent(self, event):
+        if self.adding_locator and event.button() == QtCore.Qt.LeftButton:
+            pos = self.mapToScene(event.pos())
+            x_norm = pos.x() / self.sceneRect().width()
+            y_norm = pos.y() / self.sceneRect().height()
+            self.locator_added.emit(x_norm, y_norm)
+            self.adding_locator = False
+            return
+
+        if event.button() == QtCore.Qt.LeftButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(QtCore.Qt.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._panning:
+            delta = event.pos() - self._pan_start
+            self._pan_start = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton and self._panning:
+            self._panning = False
+            self.setCursor(QtCore.Qt.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & QtCore.Qt.ControlModifier:
+            factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+            self.scale(factor, factor)
+        else:
+            super().wheelEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if self._pixmap.pixmap() and not self._pixmap.pixmap().isNull():
+            self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
+        super().mouseDoubleClickEvent(event)
+
+
+def update_tree():
+    """Rebuild the scene tree from ``main_window.scene``."""
+    main_window.MainTree.clear()
+    for idx, path in enumerate(main_window.image_paths):
+        img_item = QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(path).name])
+        img_item.setData(0, QtCore.Qt.UserRole, ("image", idx))
+        markers = main_window.scene[idx]["markers"]
+        for m_idx, marker in enumerate(markers):
+            loc_item = QtWidgets.QTreeWidgetItem(img_item, [marker["name"]])
+            loc_item.setData(0, QtCore.Qt.UserRole, ("locator", idx, m_idx))
+        img_item.setExpanded(True)
+
+
+def show_image(index: int):
+    if 0 <= index < len(main_window.images):
+        main_window.current_image_index = index
+        main_window.viewer.load_image(main_window.images[index])
+        main_window.viewer.set_markers(main_window.scene[index]["markers"])
+
+
+def on_tree_selection_changed(current, _previous):
+    if not current:
+        return
+    data = current.data(0, QtCore.Qt.UserRole)
+    if not data:
+        return
+    if data[0] == "image":
+        show_image(data[1])
+    elif data[0] == "locator":
+        show_image(data[1])
+        main_window.viewer.set_markers(main_window.scene[data[1]]["markers"])
+        # Highlight selected locator
+        for i in range(0, len(main_window.viewer.mark_items), 2):
+            main_window.viewer.mark_items[i].setBrush(QtGui.QBrush(QtCore.Qt.red))
+        idx = data[2]
+        if 0 <= idx < len(main_window.viewer.mark_items) // 2:
+            ellipse = main_window.viewer.mark_items[idx * 2]
+            ellipse.setBrush(QtGui.QBrush(QtCore.Qt.green))
+
+
+def delete_selected_locator():
+    item = main_window.MainTree.currentItem()
+    if not item:
+        return
+    data = item.data(0, QtCore.Qt.UserRole)
+    if not data or data[0] != "locator":
+        return
+    img_idx, loc_idx = data[1], data[2]
+    markers = main_window.scene[img_idx]["markers"]
+    if 0 <= loc_idx < len(markers):
+        markers.pop(loc_idx)
+        update_tree()
+        show_image(img_idx)
+
+
+def on_locator_added(x_norm: float, y_norm: float):
+    idx = getattr(main_window, "current_image_index", 0)
+    if idx >= len(main_window.scene):
+        return
+    name = f"Loc{main_window.locator_counter}"
+    main_window.locator_counter += 1
+    main_window.scene[idx]["markers"].append({"name": name, "x": x_norm, "y": y_norm})
+    update_tree()
+    show_image(idx)
+
+
+
 def new_scene():
     main_window.image_paths = []
     main_window.images = []
-    main_window.MainTree.clear()
+    main_window.scene = []
+    main_window.locator_counter = 1
+    update_tree()
+    main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
+    main_window.viewer.set_markers([])
     QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
 def import_images():
@@ -28,9 +189,14 @@ def import_images():
     paths = AMUtilities.verify_paths(paths)
     main_window.image_paths = paths
     main_window.images = AMUtilities.load_images(paths)
-    main_window.MainTree.clear()
-    for p in main_window.image_paths:
-        QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(p).name])
+    main_window.scene = [{"path": p, "markers": []} for p in paths]
+    main_window.locator_counter = 1
+    update_tree()
+    if main_window.images:
+        show_image(0)
+    else:
+        main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
+        main_window.viewer.set_markers([])
 
 def save_scene():
     path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -38,7 +204,10 @@ def save_scene():
     )
     if not path:
         return
-    scene = {"images": getattr(main_window, "image_paths", [])}
+    scene = {
+        "images": getattr(main_window, "image_paths", []),
+        "markers": [d["markers"] for d in getattr(main_window, "scene", [])],
+    }
     AMUtilities.save_scene(scene, path)
 
 def save_scene_as():
@@ -53,9 +222,18 @@ def load_scene():
     scene = AMUtilities.load_scene(path)
     main_window.image_paths = scene.get("images", [])
     main_window.images = AMUtilities.load_images(main_window.image_paths)
-    main_window.MainTree.clear()
-    for p in main_window.image_paths:
-        QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(p).name])
+    loaded_markers = scene.get("markers", [])
+    main_window.scene = []
+    for i, p in enumerate(main_window.image_paths):
+        mlist = loaded_markers[i] if i < len(loaded_markers) else []
+        main_window.scene.append({"path": p, "markers": mlist})
+    main_window.locator_counter = 1 + sum(len(d["markers"]) for d in main_window.scene)
+    update_tree()
+    if main_window.images:
+        show_image(0)
+    else:
+        main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
+        main_window.viewer.set_markers([])
 
 def open_recent_project():
     QtWidgets.QMessageBox.information(main_window, "Recent", "Recent projects not implemented.")
@@ -70,7 +248,11 @@ def redo():
     QtWidgets.QMessageBox.information(main_window, "Redo", "Redo not implemented.")
 
 def add_locator():
-    QtWidgets.QMessageBox.information(main_window, "Add Locator", "Create/Move marker not implemented.")
+    if not main_window.images:
+        QtWidgets.QMessageBox.warning(main_window, "Add Locator", "No image loaded.")
+        return
+    main_window.viewer.adding_locator = True
+    QtWidgets.QMessageBox.information(main_window, "Add Locator", "Click on the image to place a locator.")
 
 def calibrate():
     if not getattr(main_window, "image_paths", []):
@@ -133,6 +315,28 @@ try:
         # Инициализация служебных полей для сцены и изображений
         main_window.image_paths = []
         main_window.images = []
+        main_window.scene = []
+        main_window.locator_counter = 1
+
+        # Viewer setup inside MainFrame
+        layout = QtWidgets.QVBoxLayout(main_window.MainFrame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        main_window.viewer = ImageViewer(main_window.MainFrame)
+        main_window.viewer.locator_added.connect(on_locator_added)
+        layout.addWidget(main_window.viewer)
+
+        # Tree selection and delete key
+        main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)
+
+        class _DeleteFilter(QtCore.QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Delete:
+                    delete_selected_locator()
+                    return True
+                return super().eventFilter(obj, event)
+
+        main_window._del_filter = _DeleteFilter(main_window.MainTree)
+        main_window.MainTree.installEventFilter(main_window._del_filter)
 
         # Toolbar buttons
         main_window.btnAddLoc.clicked.connect(add_locator)

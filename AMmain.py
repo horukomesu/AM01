@@ -40,17 +40,20 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimg))
         self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
 
-    def set_markers(self, markers):
+    def set_markers(self, markers, highlight_name=None):
         for item in self.mark_items:
             self.scene().removeItem(item)
         self.mark_items = []
         for m in markers:
-            self._add_marker_item(m["x"], m["y"], m.get("name", ""))
+            self._add_marker_item(
+                m["x"], m["y"], m.get("name", ""), m.get("name") == highlight_name
+            )
 
-    def _add_marker_item(self, x_norm: float, y_norm: float, name: str):
+    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False):
         rect = QtCore.QRectF(-5, -5, 10, 10)
         item = QtWidgets.QGraphicsEllipseItem(rect)
-        item.setBrush(QtGui.QBrush(QtCore.Qt.red))
+        color = QtCore.Qt.green if highlight else QtCore.Qt.red
+        item.setBrush(QtGui.QBrush(color))
         item.setPen(QtGui.QPen(QtCore.Qt.black))
         pos = QtCore.QPointF(x_norm * self.sceneRect().width(), y_norm * self.sceneRect().height())
         item.setPos(pos)
@@ -69,7 +72,6 @@ class ImageViewer(QtWidgets.QGraphicsView):
             x_norm = pos.x() / self.sceneRect().width()
             y_norm = pos.y() / self.sceneRect().height()
             self.locator_added.emit(x_norm, y_norm)
-            self.adding_locator = False
             return
 
         if event.button() == QtCore.Qt.LeftButton:
@@ -105,24 +107,51 @@ class ImageViewer(QtWidgets.QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
 
+def get_image_markers(index: int):
+    """Return list of markers for the given image index."""
+    markers = []
+    for loc in getattr(main_window, "locators", []):
+        pos = loc.get("positions", {}).get(index)
+        if pos:
+            markers.append({"name": loc["name"], "x": pos["x"], "y": pos["y"]})
+    return markers
+
+
 def update_tree():
-    """Rebuild the scene tree from ``main_window.scene``."""
-    main_window.MainTree.clear()
+    """Rebuild the tree with image and locator nodes."""
+    tree = main_window.MainTree
+    tree.clear()
+
+    img_root = QtWidgets.QTreeWidgetItem(tree, ["Images"])
+    img_root.setData(0, QtCore.Qt.UserRole, ("images_root",))
     for idx, path in enumerate(main_window.image_paths):
-        img_item = QtWidgets.QTreeWidgetItem(main_window.MainTree, [Path(path).name])
-        img_item.setData(0, QtCore.Qt.UserRole, ("image", idx))
-        markers = main_window.scene[idx]["markers"]
-        for m_idx, marker in enumerate(markers):
-            loc_item = QtWidgets.QTreeWidgetItem(img_item, [marker["name"]])
-            loc_item.setData(0, QtCore.Qt.UserRole, ("locator", idx, m_idx))
-        img_item.setExpanded(True)
+        item = QtWidgets.QTreeWidgetItem(img_root, [Path(path).name])
+        item.setData(0, QtCore.Qt.UserRole, ("image", idx))
+
+    loc_root = QtWidgets.QTreeWidgetItem(tree, ["Locators"])
+    loc_root.setData(0, QtCore.Qt.UserRole, ("loc_root",))
+    for loc in getattr(main_window, "locators", []):
+        item = QtWidgets.QTreeWidgetItem(loc_root, [loc["name"]])
+        item.setData(0, QtCore.Qt.UserRole, ("locator", loc["name"]))
+
+    img_root.setExpanded(True)
+    loc_root.setExpanded(True)
+
+
+def exit_locator_mode():
+    """Reset locator placement mode."""
+    main_window.locator_mode = False
+    main_window.current_locator = None
+    main_window.viewer.adding_locator = False
+    main_window.viewer.setCursor(QtCore.Qt.ArrowCursor)
 
 
 def show_image(index: int):
     if 0 <= index < len(main_window.images):
         main_window.current_image_index = index
         main_window.viewer.load_image(main_window.images[index])
-        main_window.viewer.set_markers(main_window.scene[index]["markers"])
+        highlight = getattr(main_window, "selected_locator", None)
+        main_window.viewer.set_markers(get_image_markers(index), highlight)
 
 
 def on_tree_selection_changed(current, _previous):
@@ -132,17 +161,11 @@ def on_tree_selection_changed(current, _previous):
     if not data:
         return
     if data[0] == "image":
+        main_window.selected_locator = None
         show_image(data[1])
     elif data[0] == "locator":
-        show_image(data[1])
-        main_window.viewer.set_markers(main_window.scene[data[1]]["markers"])
-        # Highlight selected locator
-        for i in range(0, len(main_window.viewer.mark_items), 2):
-            main_window.viewer.mark_items[i].setBrush(QtGui.QBrush(QtCore.Qt.red))
-        idx = data[2]
-        if 0 <= idx < len(main_window.viewer.mark_items) // 2:
-            ellipse = main_window.viewer.mark_items[idx * 2]
-            ellipse.setBrush(QtGui.QBrush(QtCore.Qt.green))
+        main_window.selected_locator = data[1]
+        show_image(getattr(main_window, "current_image_index", 0))
 
 
 def delete_selected_locator():
@@ -152,21 +175,22 @@ def delete_selected_locator():
     data = item.data(0, QtCore.Qt.UserRole)
     if not data or data[0] != "locator":
         return
-    img_idx, loc_idx = data[1], data[2]
-    markers = main_window.scene[img_idx]["markers"]
-    if 0 <= loc_idx < len(markers):
-        markers.pop(loc_idx)
-        update_tree()
-        show_image(img_idx)
+    name = data[1]
+    main_window.locators = [l for l in main_window.locators if l["name"] != name]
+    if main_window.selected_locator == name:
+        main_window.selected_locator = None
+    update_tree()
+    show_image(getattr(main_window, "current_image_index", 0))
 
 
 def on_locator_added(x_norm: float, y_norm: float):
     idx = getattr(main_window, "current_image_index", 0)
-    if idx >= len(main_window.scene):
+    if idx >= len(main_window.image_paths):
         return
-    name = f"Loc{main_window.locator_counter}"
-    main_window.locator_counter += 1
-    main_window.scene[idx]["markers"].append({"name": name, "x": x_norm, "y": y_norm})
+    loc = getattr(main_window, "current_locator", None)
+    if not loc:
+        return
+    loc.setdefault("positions", {})[idx] = {"x": x_norm, "y": y_norm}
     update_tree()
     show_image(idx)
 
@@ -175,7 +199,9 @@ def on_locator_added(x_norm: float, y_norm: float):
 def new_scene():
     main_window.image_paths = []
     main_window.images = []
-    main_window.scene = []
+    main_window.locators = []
+    main_window.current_locator = None
+    main_window.selected_locator = None
     main_window.locator_counter = 1
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
@@ -189,7 +215,9 @@ def import_images():
     paths = AMUtilities.verify_paths(paths)
     main_window.image_paths = paths
     main_window.images = AMUtilities.load_images(paths)
-    main_window.scene = [{"path": p, "markers": []} for p in paths]
+    main_window.locators = []
+    main_window.current_locator = None
+    main_window.selected_locator = None
     main_window.locator_counter = 1
     update_tree()
     if main_window.images:
@@ -206,7 +234,7 @@ def save_scene():
         return
     scene = {
         "images": getattr(main_window, "image_paths", []),
-        "markers": [d["markers"] for d in getattr(main_window, "scene", [])],
+        "locators": getattr(main_window, "locators", []),
     }
     AMUtilities.save_scene(scene, path)
 
@@ -222,12 +250,17 @@ def load_scene():
     scene = AMUtilities.load_scene(path)
     main_window.image_paths = scene.get("images", [])
     main_window.images = AMUtilities.load_images(main_window.image_paths)
-    loaded_markers = scene.get("markers", [])
-    main_window.scene = []
-    for i, p in enumerate(main_window.image_paths):
-        mlist = loaded_markers[i] if i < len(loaded_markers) else []
-        main_window.scene.append({"path": p, "markers": mlist})
-    main_window.locator_counter = 1 + sum(len(d["markers"]) for d in main_window.scene)
+    main_window.locators = scene.get("locators", [])
+    main_window.current_locator = None
+    main_window.selected_locator = None
+    main_window.locator_counter = 1
+    for loc in main_window.locators:
+        try:
+            num = int(loc["name"].lstrip("loc"))
+            if num >= main_window.locator_counter:
+                main_window.locator_counter = num + 1
+        except Exception:
+            pass
     update_tree()
     if main_window.images:
         show_image(0)
@@ -251,8 +284,20 @@ def add_locator():
     if not main_window.images:
         QtWidgets.QMessageBox.warning(main_window, "Add Locator", "No image loaded.")
         return
+    if getattr(main_window, "locator_mode", False):
+        exit_locator_mode()
+    name = f"loc{main_window.locator_counter}"
+    main_window.locator_counter += 1
+    main_window.current_locator = {"name": name, "positions": {}}
+    main_window.locators.append(main_window.current_locator)
     main_window.viewer.adding_locator = True
-    QtWidgets.QMessageBox.information(main_window, "Add Locator", "Click on the image to place a locator.")
+    main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
+    main_window.locator_mode = True
+    QtWidgets.QMessageBox.information(
+        main_window,
+        "Add Locator",
+        f"Placing {name}. Click on images to mark its position. Press Esc to finish.",
+    )
 
 def calibrate():
     if not getattr(main_window, "image_paths", []):
@@ -315,7 +360,10 @@ try:
         # Инициализация служебных полей для сцены и изображений
         main_window.image_paths = []
         main_window.images = []
-        main_window.scene = []
+        main_window.locators = []
+        main_window.current_locator = None
+        main_window.selected_locator = None
+        main_window.locator_mode = False
         main_window.locator_counter = 1
 
         # Viewer setup inside MainFrame
@@ -337,6 +385,16 @@ try:
 
         main_window._del_filter = _DeleteFilter(main_window.MainTree)
         main_window.MainTree.installEventFilter(main_window._del_filter)
+
+        class _EscFilter(QtCore.QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Escape:
+                    exit_locator_mode()
+                    return True
+                return super().eventFilter(obj, event)
+
+        main_window._esc_filter = _EscFilter(main_window.viewer)
+        main_window.viewer.installEventFilter(main_window._esc_filter)
 
         # Toolbar buttons
         main_window.btnAddLoc.clicked.connect(add_locator)

@@ -90,12 +90,13 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.mark_items.append(text)
 
     def mousePressEvent(self, event):
-        if self.adding_locator and event.button() == QtCore.Qt.LeftButton:
-            pos = self.mapToScene(event.pos())
-            x_norm = pos.x() / self.sceneRect().width()
-            y_norm = pos.y() / self.sceneRect().height()
-            self.locator_added.emit(x_norm, y_norm)
-            return
+        if self.adding_locator:
+            if event.button() == QtCore.Qt.LeftButton:
+                pos = self.mapToScene(event.pos())
+                x_norm = pos.x() / self.sceneRect().width()
+                y_norm = pos.y() / self.sceneRect().height()
+                self.locator_added.emit(x_norm, y_norm)
+                return
 
         if event.button() == QtCore.Qt.MiddleButton:
             self._panning = True
@@ -189,10 +190,18 @@ def update_tree():
     loc_root.setExpanded(True)
 
 
+def get_next_locator_name() -> str:
+    """Return the minimal free locator name as ``locN``."""
+    existing = {loc["name"] for loc in getattr(main_window, "locators", [])}
+    idx = 1
+    while f"loc{idx}" in existing:
+        idx += 1
+    return f"loc{idx}"
+
+
 def exit_locator_mode():
     """Reset locator placement mode."""
     main_window.locator_mode = False
-    main_window.current_locator = None
     main_window.viewer.adding_locator = False
     main_window.viewer.setCursor(QtCore.Qt.ArrowCursor)
 
@@ -229,9 +238,14 @@ def on_tree_selection_changed(current, _previous):
         return
     if data[0] == "image":
         main_window.selected_locator = None
+        exit_locator_mode()
         show_image(data[1])
     elif data[0] == "locator":
+        exit_locator_mode()
         main_window.selected_locator = data[1]
+        main_window.viewer.adding_locator = True
+        main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
+        main_window.locator_mode = True
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
 
@@ -254,28 +268,28 @@ def on_locator_added(x_norm: float, y_norm: float):
     idx = getattr(main_window, "current_image_index", 0)
     if idx >= len(main_window.image_paths):
         return
-    loc = getattr(main_window, "current_locator", None)
+    name = getattr(main_window, "selected_locator", None)
+    if not name:
+        return
+    loc = next((l for l in main_window.locators if l["name"] == name), None)
     if not loc:
         return
     loc.setdefault("positions", {})[idx] = {"x": x_norm, "y": y_norm}
     update_tree()
     show_image(idx, keep_view=True)
-
-
-
 def new_scene():
+    exit_locator_mode()
     main_window.image_paths = []
     main_window.images = []
     main_window.locators = []
-    main_window.current_locator = None
     main_window.selected_locator = None
-    main_window.locator_counter = 1
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
     QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
 def import_images():
+    exit_locator_mode()
     paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
         main_window, "Select Images", "", "Images (*.png *.jpg *.jpeg *.tif)"
     )
@@ -283,9 +297,7 @@ def import_images():
     main_window.image_paths = paths
     main_window.images = AMUtilities.load_images(paths)
     main_window.locators = []
-    main_window.current_locator = None
     main_window.selected_locator = None
-    main_window.locator_counter = 1
     update_tree()
     if main_window.images:
         show_image(0)
@@ -309,6 +321,7 @@ def save_scene_as():
     save_scene()
 
 def load_scene():
+    exit_locator_mode()
     path, _ = QtWidgets.QFileDialog.getOpenFileName(
         main_window, "Load Scene", "", "JSON (*.json)"
     )
@@ -318,16 +331,7 @@ def load_scene():
     main_window.image_paths = scene.get("images", [])
     main_window.images = AMUtilities.load_images(main_window.image_paths)
     main_window.locators = scene.get("locators", [])
-    main_window.current_locator = None
     main_window.selected_locator = None
-    main_window.locator_counter = 1
-    for loc in main_window.locators:
-        try:
-            num = int(loc["name"].lstrip("loc"))
-            if num >= main_window.locator_counter:
-                main_window.locator_counter = num + 1
-        except Exception:
-            pass
     update_tree()
     if main_window.images:
         show_image(0)
@@ -351,31 +355,20 @@ def add_locator():
     if not main_window.images:
         QtWidgets.QMessageBox.warning(main_window, "Add Locator", "No image loaded.")
         return
-    if getattr(main_window, "locator_mode", False):
-        exit_locator_mode()
-    # Reuse selected locator if any, otherwise create a new one
-    selected = getattr(main_window, "selected_locator", None)
-    if selected:
-        loc = next((l for l in main_window.locators if l["name"] == selected), None)
-        if loc is None:
-            QtWidgets.QMessageBox.warning(main_window, "Add Locator", "Selected locator missing.")
-            return
-        main_window.current_locator = loc
-        name = loc["name"]
-    else:
-        name = f"loc{main_window.locator_counter}"
-        main_window.locator_counter += 1
-        main_window.current_locator = {"name": name, "positions": {}}
-        main_window.locators.append(main_window.current_locator)
-        update_tree()
+    exit_locator_mode()
+    name = get_next_locator_name()
+    loc = {"name": name, "positions": {}}
+    main_window.locators.append(loc)
+    update_tree()
+    main_window.selected_locator = name
     main_window.viewer.adding_locator = True
-    main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
     main_window.locator_mode = True
-    QtWidgets.QMessageBox.information(
-        main_window,
-        "Add Locator",
-        f"Placing {name}. Click on images to mark its position. Press Esc to finish.",
-    )
+    main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
+    # select item in tree
+    items = main_window.MainTree.findItems(name, QtCore.Qt.MatchRecursive)
+    if items:
+        main_window.MainTree.setCurrentItem(items[0])
+
 
 def calibrate():
     if not getattr(main_window, "image_paths", []):
@@ -439,10 +432,8 @@ try:
         main_window.image_paths = []
         main_window.images = []
         main_window.locators = []
-        main_window.current_locator = None
         main_window.selected_locator = None
         main_window.locator_mode = False
-        main_window.locator_counter = 1
 
         # Viewer setup inside MainFrame
         layout = QtWidgets.QVBoxLayout(main_window.MainFrame)

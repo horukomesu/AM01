@@ -35,6 +35,19 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._pan_start = QtCore.QPoint()
         self.adding_locator = False
 
+        # Zoom behaviour configuration
+        self.zoom_step = 1.2
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
+        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_action_menu)
+
+    def _show_action_menu(self, pos):
+        if main_window is None:
+            return
+        menu = getattr(main_window, "action_menu", None)
+        if menu:
+            menu.exec_(self.mapToGlobal(pos))
+
     def load_image(self, qimg: QtGui.QImage):
         self.scene().setSceneRect(0, 0, qimg.width(), qimg.height())
         self._pixmap.setPixmap(QtGui.QPixmap.fromImage(qimg))
@@ -72,10 +85,16 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.adding_locator = False
             return
 
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MiddleButton:
             self._panning = True
             self._pan_start = event.pos()
             self.setCursor(QtCore.Qt.ClosedHandCursor)
+            return
+
+        if event.button() == QtCore.Qt.RightButton:
+            self._show_action_menu(event.pos())
+            return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -84,20 +103,27 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self._pan_start = event.pos()
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton and self._panning:
+        if event.button() == QtCore.Qt.MiddleButton and self._panning:
             self._panning = False
             self.setCursor(QtCore.Qt.ArrowCursor)
+            return
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
+        delta = event.angleDelta().y()
         if event.modifiers() & QtCore.Qt.ControlModifier:
-            factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-            self.scale(factor, factor)
-        else:
-            super().wheelEvent(event)
+            if delta < 0:
+                show_image(getattr(main_window, "current_image_index", 0) + 1)
+            elif delta > 0:
+                show_image(getattr(main_window, "current_image_index", 0) - 1)
+            return
+
+        factor = self.zoom_step if delta > 0 else 1.0 / self.zoom_step
+        self.scale(factor, factor)
 
     def mouseDoubleClickEvent(self, event):
         if self._pixmap.pixmap() and not self._pixmap.pixmap().isNull():
@@ -324,6 +350,20 @@ try:
         main_window.viewer = ImageViewer(main_window.MainFrame)
         main_window.viewer.locator_added.connect(on_locator_added)
         layout.addWidget(main_window.viewer)
+
+        # Context action menu for the viewer
+        main_window.action_menu = QtWidgets.QMenu(main_window)
+        main_window.action_menu.addAction("Add Locator", add_locator)
+        main_window.action_menu.addAction("Calibrate", calibrate)
+        main_window.action_menu.addAction("Define Worldspace", define_worldspace)
+        main_window.action_menu.addAction("Define Reference Distance", define_reference_distance)
+        main_window.action_menu.addAction("Add Modeling Locator", add_modeling_locator)
+
+        # Shortcuts for image navigation
+        main_window._next_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Right), main_window)
+        main_window._next_shortcut.activated.connect(lambda: show_image(getattr(main_window, "current_image_index", 0) + 1))
+        main_window._prev_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Left), main_window)
+        main_window._prev_shortcut.activated.connect(lambda: show_image(getattr(main_window, "current_image_index", 0) - 1))
 
         # Tree selection and delete key
         main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)

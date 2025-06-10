@@ -27,6 +27,7 @@ class CameraCalibrator:
         self._cameras: List[CameraParameters] = []
         self._points_3d: List[Optional[np.ndarray]] = []
         self._reprojection_error: Optional[float] = None
+        self._image_shapes: List[Tuple[int, int]] = []
 
     @staticmethod
     def _default_camera_matrix(image_shape: Tuple[int, int]) -> np.ndarray:
@@ -51,6 +52,7 @@ class CameraCalibrator:
         """
 
         num_cams = len(image_shapes)
+        self._image_shapes = list(image_shapes)
         if self._camera_matrix is None:
             self._camera_matrix = self._default_camera_matrix(image_shapes[0])
 
@@ -164,3 +166,19 @@ class CameraCalibrator:
 
     def get_reprojection_error(self) -> Optional[float]:
         return self._reprojection_error
+
+    def get_camera_intrinsics(self) -> Optional[np.ndarray]:
+        """Return the camera intrinsic matrix used for calibration."""
+        return self._camera_matrix
+
+    def get_image_shapes(self) -> List[Tuple[int, int]]:
+        """Return image sizes as ``(height, width)`` used in calibration."""
+        return list(self._image_shapes)
+
+    def get_named_points_3d(self, locator_names: List[str]) -> List[Tuple[str, np.ndarray]]:
+        """Return list of (name, point) for each successfully reconstructed locator."""
+        result: List[Tuple[str, np.ndarray]] = []
+        for name, pt in zip(locator_names, self._points_3d):
+            if pt is not None:
+                result.append((name, pt))
+        return result

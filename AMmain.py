@@ -8,9 +8,7 @@ from pathlib import Path
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
 
 import AMUtilities
-import AMCameraCalibrate
-import numpy as np
-import cv2
+from CameraCalibrator import CameraCalibrator
 
 # Держим ссылку глобально, чтобы окно не закрывалось сразу
 main_window = None
@@ -265,6 +263,7 @@ def new_scene():
     main_window.locators = []
     main_window.current_locator = None
     main_window.selected_locator = None
+    main_window.calibration = None
     main_window.locator_counter = 1
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
@@ -281,6 +280,7 @@ def import_images():
     main_window.locators = []
     main_window.current_locator = None
     main_window.selected_locator = None
+    main_window.calibration = None
     main_window.locator_counter = 1
     update_tree()
     if main_window.images:
@@ -316,6 +316,7 @@ def load_scene():
     main_window.locators = scene.get("locators", [])
     main_window.current_locator = None
     main_window.selected_locator = None
+    main_window.calibration = None
     main_window.locator_counter = 1
     for loc in main_window.locators:
         try:
@@ -363,39 +364,60 @@ def add_locator():
     )
 
 def calibrate():
+    """Run camera calibration using placed locators."""
     if not getattr(main_window, "image_paths", []):
-        QtWidgets.QMessageBox.warning(main_window, "Calibrate", "No images loaded for calibration.")
+        QtWidgets.QMessageBox.warning(
+            main_window, "Calibrate", "No images loaded for calibration."
+        )
         return
 
-    board_size = (9, 6)
-    objp = np.zeros((board_size[0] * board_size[1], 3), np.float32)
-    objp[:, :2] = np.mgrid[0:board_size[0], 0:board_size[1]].T.reshape(-1, 2)
-
-    image_points = []
-    object_points = []
-    image_size = None
-
-    for img_path in main_window.image_paths:
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            continue
-        if image_size is None:
-            image_size = (img.shape[1], img.shape[0])
-        ret, corners = cv2.findChessboardCorners(img, board_size, None)
-        if ret:
-            object_points.append(objp)
-            image_points.append(corners)
-
-    if not image_points:
-        QtWidgets.QMessageBox.warning(main_window, "Calibrate", "Chessboard corners not found in any image.")
+    if not getattr(main_window, "locators", []):
+        QtWidgets.QMessageBox.warning(
+            main_window, "Calibrate", "No locators placed for calibration."
+        )
         return
 
-    result = AMCameraCalibrate.calibrate_cameras(image_points, object_points, image_size)
-    QtWidgets.QMessageBox.information(
-        main_window,
-        "Calibration Completed",
-        f"Reprojection error: {result.reprojection_error:.4f}",
+    image_shapes = [
+        (img.height(), img.width()) for img in getattr(main_window, "images", [])
+    ]
+
+    matches = []
+    for loc in main_window.locators:
+        track = {}
+        for idx, pos in loc.get("positions", {}).items():
+            if idx >= len(image_shapes):
+                continue
+            w = image_shapes[idx][1]
+            h = image_shapes[idx][0]
+            track[idx] = (pos["x"] * w, pos["y"] * h)
+        if track:
+            matches.append(track)
+
+    if len(matches) < 2:
+        QtWidgets.QMessageBox.warning(
+            main_window, "Calibrate", "Not enough locators to compute calibration."
+        )
+        return
+
+    calibrator = CameraCalibrator()
+    try:
+        calibrator.calibrate(matches, image_shapes)
+    except Exception as exc:
+        QtWidgets.QMessageBox.critical(
+            main_window, "Calibrate", f"Calibration failed:\n{exc}"
+        )
+        return
+
+    main_window.calibration = calibrator
+    error = calibrator.get_reprojection_error()
+    msg = (
+        f"Recovered {len(calibrator.get_camera_parameters())} cameras.\n"
+        f"3D points: {len(calibrator.get_points_3d())}"
     )
+    if error is not None:
+        msg += f"\nReprojection error: {error:.4f}"
+
+    QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
 
 def define_worldspace():
     QtWidgets.QMessageBox.information(main_window, "Worldspace", "Define worldspace not implemented.")

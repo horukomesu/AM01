@@ -15,10 +15,11 @@ from typing import List
 
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
 
-# Ensure this directory is on sys.path so local modules can be imported
+
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+
 
 import AMUtilities
 import AMCameraCalibrate

@@ -1,183 +1,325 @@
-"""Automatic camera calibration using pycolmap."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional, Tuple, Any
 import os
 import shutil
 import tempfile
 from pathlib import Path
-
 import numpy as np
 from PIL import Image
 import pycolmap
 
-
 @dataclass
 class CameraParameters:
-    """Intrinsics, extrinsics and projection matrix for a camera."""
-
-    projection: Optional[np.ndarray]
-    rotation: Optional[np.ndarray]
-    translation: Optional[np.ndarray]
-    center: Optional[np.ndarray]
-
+    intrinsics: List[List[float]]  # 3x3 матрица K
+    rotation: List[List[float]]    # 3x3 матрица R
+    translation: List[float]       # 3-элементный вектор t
 
 class CameraCalibrator:
-    """Simple SfM pipeline based on pycolmap."""
-
     def __init__(self) -> None:
-        """Initialize the calibrator."""
         self.image_paths: List[str] = []
+        self.image_shapes: List[Tuple[int, int]] = []
+        self.point_data: Dict[int, Dict[int, Tuple[float, float]]] = {}
         self.image_names: List[str] = []
-        self.image_shapes: List[tuple[int, int]] = []
-        self.locators: List[Dict[str, Dict[int, Dict[str, float]]]] = []
-
+        self.calibration_results: Optional[Dict[str, Any]] = None
+        self.keypoint_maps: Dict[int, Dict[int, int]] = {}
         self._temp_dir: Optional[str] = None
-        self._db_path: Optional[str] = None
-        self._images_dir: Optional[str] = None
-        self._recon: Optional[pycolmap.Reconstruction] = None
-        self._reproj_error: Optional[float] = None
 
-    # ------------------------------------------------------------------
     def load_images(self, image_paths: List[str]) -> None:
-        """Store image paths and read their sizes."""
         self.image_paths = list(image_paths)
         self.image_names = [Path(p).name for p in self.image_paths]
-        self.image_shapes = []
-        for p in self.image_paths:
-            with Image.open(p) as img:
-                self.image_shapes.append((img.height, img.width))
+        self.image_shapes = [(Image.open(p).width, Image.open(p).height) for p in self.image_paths]
 
-    # ------------------------------------------------------------------
-    def load_locators(self, locators: List[dict]) -> None:
-        """Store user defined locator tracks."""
-        self.locators = [dict(l) for l in locators]
+    def load_point_data(self, point_data: Dict[int, Dict[int, Tuple[float, float]]]) -> None:
+        self.point_data = point_data
 
-    # ------------------------------------------------------------------
-    def detect_and_match_features(self) -> None:
-        """Create COLMAP database from manually placed points."""
-        if not self.image_paths:
-            raise ValueError("No images loaded")
-        if not self.locators:
-            raise ValueError("No locator data provided")
+    def _populate_colmap_database(self, db_path: str) -> bool:
+        """
+        Creates and populates the COLMAP database using PyCOLMAP bindings,
+        including manually writing matches and two-view geometries based
+        on point_data. Requires image_shapes to be pre-loaded.
 
-        self._temp_dir = tempfile.mkdtemp(prefix="sfm_")
-        self._images_dir = os.path.join(self._temp_dir, "images")
-        os.makedirs(self._images_dir, exist_ok=True)
-        for src, name in zip(self.image_paths, self.image_names):
-            shutil.copy(src, os.path.join(self._images_dir, name))
+        Args:
+            db_path: Absolute path to the COLMAP database file.
 
-        self._db_path = os.path.join(self._temp_dir, "database.db")
-        db = pycolmap.Database.connect(self._db_path)
+        Returns:
+            True if successful, False otherwise.
+        """
+        try:
+            if not pycolmap:
+                print("Error: PyCOLMAP is not available.")
+                return False
 
-        image_id_map = {}
-        kp_maps: List[Dict[int, int]] = []
+            print(f"Creating COLMAP database: {db_path}")
 
-        for idx, (name, shape) in enumerate(zip(self.image_names, self.image_shapes)):
-            h, w = shape
-            cam = pycolmap.Camera.create("SIMPLE_PINHOLE", w, h, np.array([w, w / 2.0, h / 2.0]))
-            cam_id = db.write_camera(cam)
-            img = pycolmap.Image(camera_id=cam_id, name=name)
-            img_id = db.write_image(img)
-            image_id_map[idx] = img_id
+            db_dir = os.path.dirname(db_path)
+            os.makedirs(db_dir, exist_ok=True)
 
-            keypoints = []
-            kp_map = {}
-            for loc_idx, loc in enumerate(self.locators):
-                pos = loc.get("positions", {}).get(idx)
-                if not pos:
-                    continue
-                keypoints.append([pos["x"] * w, pos["y"] * h, 1.0, 0.0])
-                kp_map[loc_idx] = len(keypoints) - 1
+            if os.path.exists(db_path):
+                try:
+                    os.remove(db_path)
+                    print(f"Removed existing database: {db_path}")
+                except OSError as e:
+                    print(f"Error removing existing database file:\n{db_path}\n{e}")
+                    return False
 
-            kp_maps.append(kp_map)
-            kp_arr = np.asarray(keypoints, dtype=np.float32)
-            if kp_arr.size:
-                db.write_keypoints(img_id, kp_arr)
-                db.write_descriptors(img_id, np.zeros((len(kp_arr), 128), dtype=np.uint8))
+            db = pycolmap.Database(db_path)
+            print(f"Database object created at {db_path}")
 
-        num_images = len(self.image_paths)
-        for i in range(num_images):
-            for j in range(i + 1, num_images):
-                matches = []
-                for loc_idx in range(len(self.locators)):
-                    i_idx = kp_maps[i].get(loc_idx)
-                    j_idx = kp_maps[j].get(loc_idx)
-                    if i_idx is not None and j_idx is not None:
-                        matches.append([i_idx, j_idx])
-                if matches:
-                    arr = np.asarray(matches, dtype=np.uint32)
-                    db.write_matches(image_id_map[i], image_id_map[j], arr)
-                    tv = pycolmap.TwoViewGeometry()
-                    tv.inlier_matches = arr
-                    db.write_two_view_geometry(image_id_map[i], image_id_map[j], tv)
+            # Prepare keypoints per image
+            keypoints_per_image = {}
+            self.keypoint_maps = {idx: {} for idx in range(len(self.image_paths))}
+            sorted_set_ids = sorted(self.point_data.keys())
 
-        db.close()
+            for img_idx in range(len(self.image_paths)):
+                keypoints_per_image[img_idx] = []
+                current_keypoint_idx = 0
+                for set_id in sorted_set_ids:
+                    if img_idx in self.point_data[set_id]:
+                        x, y = self.point_data[set_id][img_idx]
+                        keypoints_per_image[img_idx].append((x, y, 1.0, 0.0))
+                        self.keypoint_maps[img_idx][set_id] = current_keypoint_idx
+                        current_keypoint_idx += 1
 
-    # ------------------------------------------------------------------
-    def run_reconstruction(self) -> None:
-        """Run incremental mapping and bundle adjustment."""
-        if self._db_path is None or self._images_dir is None:
-            raise RuntimeError("Features were not detected")
+            print("Prepared keypoint data and keypoint_maps.")
 
-        out_path = os.path.join(self._temp_dir, "reconstruction")
-        opts = {
-            "Mapper.tri_min_angle": 1.0,
-            "Mapper.abs_pose_min_inlier_ratio": 0.1,
-        }
-        result = pycolmap.incremental_mapping(self._db_path, self._images_dir, out_path, opts)
-        if not result:
-            raise RuntimeError("Reconstruction failed")
-        self._recon = next(iter(result.values()))
-        self._reproj_error = float(self._recon.compute_mean_reprojection_error())
+            # Use a transaction
+            with pycolmap.DatabaseTransaction(db):
+                SIMPLE_PINHOLE = pycolmap.CameraModelId.SIMPLE_PINHOLE
+                camera_ids = {}
+                image_ids = {}
 
-    # ------------------------------------------------------------------
-    def get_camera_parameters(self) -> List[CameraParameters]:
-        params: List[CameraParameters] = []
-        if self._recon is None:
-            return params
-        for name in self.image_names:
-            img = self._recon.find_image_with_name(name)
-            if img is None or not img.has_pose:
-                params.append(CameraParameters(None, None, None, None))
-                continue
-            cam = self._recon.camera(img.camera_id)
-            R = img.cam_from_world.rotation.matrix()
-            t = img.cam_from_world.translation.reshape(3, 1)
-            P = cam.calibration_matrix() @ np.hstack((R, t))
-            c = -R.T @ t
-            params.append(CameraParameters(P, R, t, c))
-        return params
+                for img_idx, img_path in enumerate(self.image_paths):
+                    basename = os.path.basename(img_path)
+                    width, height = self.image_shapes[img_idx]
+                    if width <= 0 or height <= 0:
+                        raise ValueError(f"Invalid shape for image {img_path}")
 
-    # ------------------------------------------------------------------
-    def get_points_3d(self) -> List[np.ndarray]:
-        if self._recon is None:
-            return []
-        return [self._recon.point3D(pid).xyz.copy() for pid in self._recon.point3D_ids()]
+                    f = 1.2 * max(width, height)
+                    cx, cy = width / 2.0, height / 2.0
+                    params = np.array([f, cx, cy], dtype=np.float64)
 
-    # ------------------------------------------------------------------
-    def get_camera_intrinsics(self) -> List[np.ndarray]:
-        mats = []
-        if self._recon is None:
-            return mats
-        for name in self.image_names:
-            img = self._recon.find_image_with_name(name)
-            if img is None:
-                mats.append(None)
+                    cam = pycolmap.Camera(
+                        model=SIMPLE_PINHOLE, width=width, height=height, params=params
+                    )
+                    cam_id = db.write_camera(cam, use_camera_id=False)
+                    camera_ids[img_idx] = cam_id
+
+                    img = pycolmap.Image(name=basename, camera_id=cam_id)
+                    img_id = db.write_image(img, use_image_id=False)
+                    image_ids[img_idx] = img_id
+
+                    keypoints = keypoints_per_image[img_idx]
+                    if keypoints:
+                        kp_array = np.array(keypoints, dtype=np.float32)
+                        desc_array = np.zeros((len(keypoints), 128), dtype=np.uint8)
+                        db.write_keypoints(img_id, kp_array)
+                        db.write_descriptors(img_id, desc_array)
+
+                print("Wrote all cameras, images, keypoints, and descriptors.")
+
+                # Write matches and two-view geometries
+                pair_count = 0
+                for i in range(len(self.image_paths)):
+                    for j in range(i + 1, len(self.image_paths)):
+                        common_sets = set(self.keypoint_maps[i]) & set(self.keypoint_maps[j])
+                        if not common_sets:
+                            continue
+
+                        matches = []
+                        for set_id in common_sets:
+                            kp1 = self.keypoint_maps[i][set_id]
+                            kp2 = self.keypoint_maps[j][set_id]
+                            matches.append((kp1, kp2))
+
+                        if matches:
+                            pair_count += 1
+                            match_arr = np.array(matches, dtype=np.uint32)
+                            db.write_matches(image_ids[i], image_ids[j], match_arr)
+
+                            geom = pycolmap.TwoViewGeometry()
+                            geom.config = pycolmap.TwoViewGeometryConfiguration.CALIBRATED
+                            geom.inlier_matches = match_arr
+                            db.write_two_view_geometry(image_ids[i], image_ids[j], geom)
+
+                print(f"Wrote matches for {pair_count} image pairs.")
+            return True
+
+        except Exception as e:
+            print(f"Exception during COLMAP DB population: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+    def calibrate(self) -> bool:
+        import traceback
+
+        if len(self.image_paths) < 2:
+            print("Calibration failed: Need at least 2 images.")
+            return False
+
+        if len(self.point_data) < 3:
+            print(f"Calibration failed: Need at least 3 point sets (found {len(self.point_data)}).")
+            return False
+
+        if not self.point_data:
+            print("Calibration failed: No point data.")
+            return False
+
+        self.calibration_results = None
+
+        colmap_base_dir = tempfile.gettempdir()
+        if hasattr(self, "current_save_path") and self.current_save_path:
+            project_dir = os.path.dirname(os.path.abspath(self.current_save_path))
+            if os.path.isdir(project_dir):
+                colmap_base_dir = project_dir
             else:
-                cam = self._recon.camera(img.camera_id)
-                mats.append(cam.calibration_matrix().copy())
-        return mats
+                print(f"Warning: Project directory '{project_dir}' not found. Using system temp.")
+        else:
+            print("Warning: No project path set. Using system temp directory for COLMAP.")
 
-    # ------------------------------------------------------------------
+        colmap_work_dir = os.path.join(colmap_base_dir, "colmap_py_work")
+        if os.path.exists(colmap_work_dir):
+            try:
+                shutil.rmtree(colmap_work_dir)
+            except OSError as e:
+                print(f"Could not remove old directory: {e}")
+                return False
+
+        try:
+            os.makedirs(colmap_work_dir)
+        except OSError as e:
+            print(f"Could not create directory: {e}")
+            return False
+
+        database_path_abs = os.path.join(colmap_work_dir, "database.db")
+        image_copy_dir_abs = os.path.join(colmap_work_dir, "images")
+        sparse_output_path_abs = os.path.join(colmap_work_dir, "sparse")
+
+        try:
+            os.makedirs(image_copy_dir_abs, exist_ok=True)
+            for path in self.image_paths:
+                shutil.copy2(path, os.path.join(image_copy_dir_abs, os.path.basename(path)))
+        except Exception as e:
+            print(f"Error copying images: {e}")
+            shutil.rmtree(colmap_work_dir, ignore_errors=True)
+            return False
+
+        try:
+            if not self._populate_colmap_database(database_path_abs):
+                print("Error populating COLMAP database.")
+                shutil.rmtree(colmap_work_dir, ignore_errors=True)
+                return False
+        except Exception as e:
+            print(f"Error populating COLMAP DB: {e}")
+            shutil.rmtree(colmap_work_dir, ignore_errors=True)
+            return False
+
+        os.makedirs(sparse_output_path_abs, exist_ok=True)
+
+        options = pycolmap.IncrementalPipelineOptions()
+        options.min_num_matches = 3
+        options.mapper.init_min_num_inliers = 3
+        options.mapper.init_min_tri_angle = 1.0
+        options.mapper.abs_pose_min_num_inliers = 3
+        options.mapper.abs_pose_max_error = 24.0
+        options.mapper.filter_min_tri_angle = 0.0
+
+        try:
+            reconstructions = pycolmap.incremental_mapping(
+                database_path=database_path_abs,
+                image_path=image_copy_dir_abs,
+                output_path=sparse_output_path_abs,
+                options=options,
+            )
+        except Exception as e:
+            print(f"PyCOLMAP mapping error:\n{e}\n{traceback.format_exc()}")
+            return False
+
+        if not reconstructions or not isinstance(reconstructions, dict):
+            print("Calibration finished: No reconstruction dictionary.")
+            return False
+
+        largest_rec = max(reconstructions.values(), key=lambda r: r.num_reg_images(), default=None)
+        if not largest_rec or largest_rec.num_reg_images() < 2:
+            print("Calibration finished: Insufficient registered images.")
+            return False
+
+        self.calibration_results = {
+            "intrinsics": {},
+            "poses": {},
+            "points_3d": [],
+            "point_ids": [],
+            "registered_indices": [],
+        }
+
+        try:
+            db = pycolmap.Database(database_path_abs)
+            img_name_to_id = {img.name: img.image_id for img in db.read_all_images()}
+            id_to_index = {}
+            for idx, path in enumerate(self.image_paths):
+                basename = os.path.basename(path)
+                if basename in img_name_to_id:
+                    id_to_index[img_name_to_id[basename]] = idx
+        except Exception as e:
+            print(f"Error reading image DB: {e}")
+            return False
+
+        for image_id, image in largest_rec.images.items():
+            idx = id_to_index.get(image_id)
+            if idx is None:
+                continue
+            cam = largest_rec.cameras[image.camera_id]
+            if cam.model == pycolmap.CameraModelId.SIMPLE_PINHOLE and len(cam.params) == 3:
+                f, cx, cy = cam.params
+                self.calibration_results["intrinsics"][idx] = {
+                    "K": [[f, 0, cx], [0, f, cy], [0, 0, 1]]
+                }
+
+            pose = image.cam_from_world
+            R_w2c = pose.rotation.matrix()
+            t_w2c = pose.translation
+            R_c2w = R_w2c.T
+            t_c2w = (-R_c2w @ t_w2c).tolist()
+
+            self.calibration_results["poses"][idx] = {
+                "R": R_c2w.tolist(),
+                "t": t_c2w
+            }
+            self.calibration_results["registered_indices"].append(idx)
+
+        self.calibration_results["points_3d"] = [pt.xyz.tolist() for pt in largest_rec.points3D.values()]
+        self.calibration_results["point_ids"] = [None] * len(largest_rec.points3D)
+
+        return True
+
+    def get_camera_parameters(self) -> List[CameraParameters]:
+        """
+        Возвращает список параметров камеры (K, R, t) для всех зарегистрированных изображений.
+        """
+        if not self.calibration_results:
+            return []
+
+        result = []
+        for img_idx in sorted(self.calibration_results["registered_indices"]):
+            intr = self.calibration_results["intrinsics"].get(img_idx)
+            pose = self.calibration_results["poses"].get(img_idx)
+            if intr and pose:
+                param = CameraParameters(
+                    intrinsics=intr["K"],
+                    rotation=pose["R"],
+                    translation=pose["t"]
+                )
+                result.append(param)
+        return result
+
+
+    def get_points_3d(self):
+        if not self.calibration_results:
+            return []
+        return [np.array(pt) for pt in self.calibration_results["points_3d"]]
+
     def get_reprojection_error(self) -> Optional[float]:
-        return self._reproj_error
-
-    # ------------------------------------------------------------------
-    @property
-    def recon(self) -> Optional[pycolmap.Reconstruction]:
-        return self._recon
-
+        return None

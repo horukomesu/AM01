@@ -3,11 +3,15 @@
 Этот скрипт загружает Qt UI, созданный в ``AMUI.ui`` как QMainWindow, и вешает обработчики.
 Используется ТОЛЬКО внутри Autodesk 3ds Max 2023+.
 """
-
+import sys
+import os
 from pathlib import Path
 from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
 import numpy as np
 import importlib
+
+BASE_DIR = os.path.dirname(__file__)
+sys.path.insert(0, BASE_DIR)
 
 import AMUtilities
 importlib.reload(AMUtilities)
@@ -392,12 +396,31 @@ def calibrate():
     calibrator = CameraCalibrator()
     try:
         calibrator.load_images(main_window.image_paths)
-        calibrator.load_locators(getattr(main_window, "locators", []))
-        calibrator.detect_and_match_features()
-        calibrator.run_reconstruction()
+
+        # ---- Новое: собрать point_data из locators ----
+        point_data = {}
+        for set_id, loc in enumerate(getattr(main_window, "locators", [])):
+            for img_idx, pos in loc.get("positions", {}).items():
+                if set_id not in point_data:
+                    point_data[set_id] = {}
+                # Преобразовать к целочисленному индексу, если ключ-строка
+                try:
+                    img_idx_int = int(img_idx)
+                except Exception:
+                    img_idx_int = img_idx
+                point_data[set_id][img_idx_int] = (pos["x"] * main_window.images[img_idx_int].width(), 
+                                                   pos["y"] * main_window.images[img_idx_int].height())
+        calibrator.load_point_data(point_data)
+        success = calibrator.calibrate()
+        if not success:
+            QtWidgets.QMessageBox.critical(
+                main_window, "Calibrate", f"Calibration failed. Check your points."
+            )
+            return
     except Exception as exc:
+        import traceback
         QtWidgets.QMessageBox.critical(
-            main_window, "Calibrate", f"Calibration failed:\n{exc}"
+            main_window, "Calibrate", f"Calibration failed:\n{exc}\n{traceback.format_exc()}"
         )
         return
 
@@ -411,6 +434,7 @@ def calibrate():
         msg += f"\nReprojection error: {error:.4f}"
 
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
+
 
 
 
@@ -431,7 +455,6 @@ def move_to_scene():
             calibrator=main_window.calibration,
             image_paths=main_window.image_paths,
             locator_names=[f"pt{i}" for i in range(len(main_window.calibration.get_points_3d()))],
-            sensor_width_mm=36.0  # или другой, если ты хочешь поддерживать crop
         )
         QtWidgets.QMessageBox.information(
             main_window, "Move to Scene", "Exported cameras and locators to 3ds Max scene."

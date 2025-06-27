@@ -118,81 +118,86 @@ def verify_paths(paths: List[str]) -> List[str]:
     return [p for p in paths if Path(p).exists()]
 
 def export_calibration_to_max(
-    calibrator,
-    image_paths,
-    locator_names,
-    sensor_width_mm: float = 36.0,
-):
-    """
-    Экспортирует камеры и локаторы в текущую сцену 3ds Max (через pymxs).
-
-    calibrator: CameraCalibrator (твой новый класс, SelfCalibratingSfM)
-    image_paths: список путей к изображениям (для имён камер)
-    locator_names: имена локаторов (для dummy)
-    sensor_width_mm: ширина сенсора для пересчёта фокусного (по умолчанию 36 мм)
-    """
+    calibrator: CameraCalibrator,
+    image_paths: List[str],
+    locator_names: List[str],
+) -> None:
     import pymxs
+    import math
     import numpy as np
     from pathlib import Path
-    import math
 
     rt = pymxs.runtime
 
-    # OpenCV → 3ds Max (Y-down → Z-up)
-    axes = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, -1.0, 0.0]
-    ])
+    OPENCV_TO_MAX = np.array([
+        [1,  0,  0],
+        [0,  0, -1],
+        [0,  1,  0]
+    ], dtype=np.float32)
 
-    cams = calibrator.get_camera_parameters()
-    K = calibrator.get_camera_intrinsics()
-    shapes = getattr(calibrator, "image_shapes", None)
+    CAMERA_ROT = np.array([
+        [1,  0,  0],
+        [0, -1,  0],
+        [0,  0, -1]
+    ], dtype=np.float32)
 
-    def as_float_tuple(arr):
-        return float(arr[0]), float(arr[1]), float(arr[2])
+    def as_point3(vec: np.ndarray):
+        return rt.Point3(float(vec[0]), float(vec[1]), float(vec[2]))
 
-    for idx, cam in enumerate(cams):
-        if cam.center is None or cam.rotation is None:
+    if not calibrator.calibration_results:
+        raise RuntimeError("No calibration results found.")
+
+    results = calibrator.calibration_results
+    poses = results.get("poses", {})
+    intrinsics = results.get("intrinsics", {})
+    points_3d = results.get("points_3d", [])
+    registered_indices = results.get("registered_indices", [])
+
+    # --- Экспорт локаторов (3D точек) ---
+    if len(locator_names) < len(points_3d):
+        locator_names += [f"pt{i}" for i in range(len(locator_names), len(points_3d))]
+
+    for pt, name in zip(points_3d, locator_names):
+        pt_cv = np.array(pt, dtype=np.float32).reshape(3)
+        pt_max = OPENCV_TO_MAX @ pt_cv
+        dummy = rt.Dummy(name=name)
+        dummy.position = as_point3(pt_max)
+
+    # --- Экспорт камер ---
+    for img_idx in registered_indices:
+        if img_idx not in poses or img_idx not in intrinsics:
             continue
-        name = Path(image_paths[idx]).stem if idx < len(image_paths) else f"cam{idx}"
 
-        # Переводим координаты и ориентацию камеры из OpenCV в Max
-        pos = axes @ cam.center.reshape(3)
-        rot = axes @ cam.rotation.T
+        pose = poses[img_idx]
+        R = np.array(pose["R"], dtype=np.float32)
+        t = np.array(pose["t"], dtype=np.float32).reshape(3)
 
-        tm = rt.Matrix3(
-            rt.Point3(*as_float_tuple(rot[:, 0])),
-            rt.Point3(*as_float_tuple(rot[:, 1])),
-            rt.Point3(*as_float_tuple(rot[:, 2])),
-            rt.Point3(*as_float_tuple(pos)),
+        R_max = OPENCV_TO_MAX @ R @ CAMERA_ROT
+        t_max = OPENCV_TO_MAX @ t
+
+        # Сборка трансформа
+        T = np.eye(4)
+        T[:3, :3] = R_max
+        T[:3, 3] = t_max
+
+        tm = rt.matrix3(
+            as_point3(T[:3, 0]),
+            as_point3(T[:3, 1]),
+            as_point3(T[:3, 2]),
+            as_point3(T[:3, 3]),
         )
-        node = rt.FreeCamera()
-        node.name = name
-        node.transform = tm
 
-        # Пересчёт focal length (focal_px → focal_mm) → FOV
-        if K is not None and idx < len(cams):
-            width_px = shapes[idx][1] if shapes is not None else None
-            fx = float(K[0, 0])
-            if width_px:
-                # focal_mm = fx / width_px * sensor_width_mm
-                try:
-                    # В 3ds Max fov задаётся в радианах!
-                    focal_mm = fx / width_px * sensor_width_mm
-                    node.fov = 2 * math.atan(sensor_width_mm / (2 * focal_mm))
-                except Exception:
-                    pass
+        # Создание камеры
+        cam_name = f"Cam_{Path(image_paths[img_idx]).stem}"
+        cam = rt.FreeCamera(name=cam_name)
 
-    # Экспортируем локаторы как Dummy
-    point_3d_list = calibrator.get_points_3d()
-    names = list(locator_names)
-    if len(names) < len(point_3d_list):
-        names += [f"pt{i}" for i in range(len(names), len(point_3d_list))]
-    for name, pt in zip(names, point_3d_list):
-        pos = axes @ pt.reshape(3)
-        dummy = rt.Dummy()
-        dummy.name = name
-        dummy.position = rt.Point3(*as_float_tuple(pos))
+        # Вычисление FOV (3ds Max требует горизонтальный угол)
+        K = np.array(intrinsics[img_idx]["K"], dtype=np.float32)
+        f = K[0, 0]  # fx
+        width = calibrator.image_shapes[img_idx][0]
 
+        xfov_rad = 2 * math.atan((width / 2.0) / f)
+        xfov_deg = math.degrees(xfov_rad)
 
+        cam.fov = xfov_deg
+        cam.transform = tm

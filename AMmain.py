@@ -382,7 +382,7 @@ def add_locator():
 
 
 def calibrate():
-    """Automatic calibration using pycolmap."""
+    """Calibrate cameras using manually placed locators."""
     if not getattr(main_window, "image_paths", []):
         QtWidgets.QMessageBox.warning(
             main_window, "Calibrate", "No images loaded for calibration."
@@ -392,6 +392,7 @@ def calibrate():
     calibrator = CameraCalibrator()
     try:
         calibrator.load_images(main_window.image_paths)
+        calibrator.load_locators(getattr(main_window, "locators", []))
         calibrator.detect_and_match_features()
         calibrator.run_reconstruction()
     except Exception as exc:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import os
 import shutil
@@ -28,11 +28,12 @@ class CameraParameters:
 class CameraCalibrator:
     """Simple SfM pipeline based on pycolmap."""
 
-    def __init__(self, feature_type: str = "SIFT") -> None:
-        self.feature_type = feature_type
+    def __init__(self) -> None:
+        """Initialize the calibrator."""
         self.image_paths: List[str] = []
         self.image_names: List[str] = []
         self.image_shapes: List[tuple[int, int]] = []
+        self.locators: List[Dict[str, Dict[int, Dict[str, float]]]] = []
 
         self._temp_dir: Optional[str] = None
         self._db_path: Optional[str] = None
@@ -51,10 +52,17 @@ class CameraCalibrator:
                 self.image_shapes.append((img.height, img.width))
 
     # ------------------------------------------------------------------
+    def load_locators(self, locators: List[dict]) -> None:
+        """Store user defined locator tracks."""
+        self.locators = [dict(l) for l in locators]
+
+    # ------------------------------------------------------------------
     def detect_and_match_features(self) -> None:
-        """Extract SIFT features and match all image pairs."""
+        """Create COLMAP database from manually placed points."""
         if not self.image_paths:
             raise ValueError("No images loaded")
+        if not self.locators:
+            raise ValueError("No locator data provided")
 
         self._temp_dir = tempfile.mkdtemp(prefix="sfm_")
         self._images_dir = os.path.join(self._temp_dir, "images")
@@ -63,8 +71,51 @@ class CameraCalibrator:
             shutil.copy(src, os.path.join(self._images_dir, name))
 
         self._db_path = os.path.join(self._temp_dir, "database.db")
-        pycolmap.extract_features(self._db_path, self._images_dir, image_list=self.image_names)
-        pycolmap.match_exhaustive(self._db_path)
+        db = pycolmap.Database.connect(self._db_path)
+
+        image_id_map = {}
+        kp_maps: List[Dict[int, int]] = []
+
+        for idx, (name, shape) in enumerate(zip(self.image_names, self.image_shapes)):
+            h, w = shape
+            cam = pycolmap.Camera.create("SIMPLE_PINHOLE", w, h, np.array([w, w / 2.0, h / 2.0]))
+            cam_id = db.write_camera(cam)
+            img = pycolmap.Image(camera_id=cam_id, name=name)
+            img_id = db.write_image(img)
+            image_id_map[idx] = img_id
+
+            keypoints = []
+            kp_map = {}
+            for loc_idx, loc in enumerate(self.locators):
+                pos = loc.get("positions", {}).get(idx)
+                if not pos:
+                    continue
+                keypoints.append([pos["x"] * w, pos["y"] * h, 1.0, 0.0])
+                kp_map[loc_idx] = len(keypoints) - 1
+
+            kp_maps.append(kp_map)
+            kp_arr = np.asarray(keypoints, dtype=np.float32)
+            if kp_arr.size:
+                db.write_keypoints(img_id, kp_arr)
+                db.write_descriptors(img_id, np.zeros((len(kp_arr), 128), dtype=np.uint8))
+
+        num_images = len(self.image_paths)
+        for i in range(num_images):
+            for j in range(i + 1, num_images):
+                matches = []
+                for loc_idx in range(len(self.locators)):
+                    i_idx = kp_maps[i].get(loc_idx)
+                    j_idx = kp_maps[j].get(loc_idx)
+                    if i_idx is not None and j_idx is not None:
+                        matches.append([i_idx, j_idx])
+                if matches:
+                    arr = np.asarray(matches, dtype=np.uint32)
+                    db.write_matches(image_id_map[i], image_id_map[j], arr)
+                    tv = pycolmap.TwoViewGeometry()
+                    tv.inlier_matches = arr
+                    db.write_two_view_geometry(image_id_map[i], image_id_map[j], tv)
+
+        db.close()
 
     # ------------------------------------------------------------------
     def run_reconstruction(self) -> None:
@@ -73,7 +124,11 @@ class CameraCalibrator:
             raise RuntimeError("Features were not detected")
 
         out_path = os.path.join(self._temp_dir, "reconstruction")
-        result = pycolmap.incremental_mapping(self._db_path, self._images_dir, out_path)
+        opts = {
+            "Mapper.tri_min_angle": 1.0,
+            "Mapper.abs_pose_min_inlier_ratio": 0.1,
+        }
+        result = pycolmap.incremental_mapping(self._db_path, self._images_dir, out_path, opts)
         if not result:
             raise RuntimeError("Reconstruction failed")
         self._recon = next(iter(result.values()))

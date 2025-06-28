@@ -15,7 +15,7 @@ except ImportError:
     QShortcutBase = QtGui.QShortcut
 
 
-
+from typing import Optional
 import numpy as np
 import importlib
 import site
@@ -168,7 +168,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.scene().addItem(text)
             self.mark_items.append(text)
 
-    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False, error: float = 0.0, color: QtGui.QColor | None = None):
+    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False, error: float = 0.0, color: Optional[QtGui.QColor] = None):
         if color is None:
             color = AMUtilities.error_to_color(error or 0.0)
         pen = QtGui.QPen(color)

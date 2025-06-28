@@ -39,6 +39,14 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         self.calibrator = None
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         glutInit()
+        # Interactive pan/zoom state
+        self._zoom = 1.0
+        self.zoom_step = 1.2
+        self._pan_offset = QtCore.QPointF(0.0, 0.0)
+        self._panning = False
+        self._pan_start = QtCore.QPoint()
+        self._plane_w = 1.0
+        self._plane_h = 1.0
 
     def load_images(self, images: list[QtGui.QImage]):
         self.texture_ids.clear()
@@ -126,7 +134,7 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
             t = np.array(cam.translation, dtype=float).reshape(3)
             eye = -R.T @ t
             center = eye + R.T @ np.array([0, 0, 1])
-            up = R.T @ np.array([0, 1, 0])
+            up = R.T @ np.array([0, -1, 0])
 
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
@@ -138,6 +146,8 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
             float(center[0]), float(center[1]), float(center[2]),
             float(up[0]), float(up[1]), float(up[2])
         )
+        glScalef(float(self._zoom), float(self._zoom), 1.0)
+        glTranslatef(float(self._pan_offset.x()), float(self._pan_offset.y()), 0.0)
         self._draw_image_plane()
         self._draw_points()
         self._draw_cameras()
@@ -232,21 +242,36 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         height = self.image_height
         plane_w = width / f
         plane_h = height / f
+        self._plane_w = plane_w
+        self._plane_h = plane_h
         half_w = plane_w / 2.0
         half_h = plane_h / 2.0
+
+        R = np.array(cam.rotation, dtype=float)
+        t = np.array(cam.translation, dtype=float).reshape(3)
+        cam_pos = -R.T @ t
+        x_axis = R.T @ np.array([1.0, 0.0, 0.0])
+        y_axis = R.T @ np.array([0.0, -1.0, 0.0])
+        z_axis = R.T @ np.array([0.0, 0.0, 1.0])
+        corners = [
+            cam_pos + z_axis + (-half_w) * x_axis + (-half_h) * y_axis,
+            cam_pos + z_axis + (half_w) * x_axis + (-half_h) * y_axis,
+            cam_pos + z_axis + (half_w) * x_axis + (half_h) * y_axis,
+            cam_pos + z_axis + (-half_w) * x_axis + (half_h) * y_axis,
+        ]
 
         glEnable(GL_TEXTURE_2D)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glColor3f(1.0, 1.0, 1.0)
         glBegin(GL_QUADS)
         glTexCoord2f(0.0, 1.0)
-        glVertex3f(-half_w, -half_h, 1.0)
+        glVertex3f(*corners[0])
         glTexCoord2f(1.0, 1.0)
-        glVertex3f(half_w, -half_h, 1.0)
+        glVertex3f(*corners[1])
         glTexCoord2f(1.0, 0.0)
-        glVertex3f(half_w, half_h, 1.0)
+        glVertex3f(*corners[2])
         glTexCoord2f(0.0, 0.0)
-        glVertex3f(-half_w, half_h, 1.0)
+        glVertex3f(*corners[3])
         glEnd()
         glBindTexture(GL_TEXTURE_2D, 0)
         glDisable(GL_TEXTURE_2D)
@@ -308,7 +333,7 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
             R = np.array(cam.rotation, dtype=float)
             t = np.array(cam.translation, dtype=float).reshape(3)
             x = (u - K[0, 2]) / K[0, 0]
-            y = (v - K[1, 2]) / K[1, 1]
+            y = -(v - K[1, 2]) / K[1, 1]
             ray_cam = np.array([x, y, 1.0])
             ray_world = R.T @ ray_cam
             ray_world /= np.linalg.norm(ray_world)
@@ -335,6 +360,11 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         return dist <= radius
 
     def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MiddleButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(QtCore.Qt.ClosedHandCursor)
+            return
         if event.button() != QtCore.Qt.LeftButton:
             return super().mousePressEvent(event)
         origin, direction = self._generate_ray(event.pos())
@@ -345,4 +375,44 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
                 break
         else:
             super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._panning:
+            dx = event.pos().x() - self._pan_start.x()
+            dy = event.pos().y() - self._pan_start.y()
+            self._pan_start = event.pos()
+            w, h = max(self.width(), 1), max(self.height(), 1)
+            if self._plane_w and self._plane_h:
+                self._pan_offset.setX(
+                    self._pan_offset.x() - dx / w * self._plane_w / self._zoom
+                )
+                self._pan_offset.setY(
+                    self._pan_offset.y() - dy / h * self._plane_h / self._zoom
+                )
+                self.update()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.MiddleButton and self._panning:
+            self._panning = False
+            self.setCursor(QtCore.Qt.ArrowCursor)
+            return
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        old_rel = self._screen_to_plane_rel(event.pos())
+        factor = self.zoom_step if event.angleDelta().y() > 0 else 1.0 / self.zoom_step
+        self._zoom *= factor
+        self._pan_offset = QtCore.QPointF(
+            old_rel.x() - (old_rel.x() - self._pan_offset.x()) * factor,
+            old_rel.y() - (old_rel.y() - self._pan_offset.y()) * factor,
+        )
+        self.update()
+
+    def _screen_to_plane_rel(self, pos: QtCore.QPoint) -> QtCore.QPointF:
+        w, h = max(self.width(), 1), max(self.height(), 1)
+        x_rel = (pos.x() / w - 0.5) * self._plane_w
+        y_rel = (0.5 - pos.y() / h) * self._plane_h
+        return QtCore.QPointF(x_rel, y_rel)
 

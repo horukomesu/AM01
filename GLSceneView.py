@@ -37,7 +37,9 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         self.scale_pair: tuple[str, str] | None = None
         self.origin_locator_name: str | None = None
         self.calibrator = None
-        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        # Capture mouse events so the user can pan/zoom the 3D view just like
+        # in the 2D viewport
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
         glutInit()
         # Interactive pan/zoom state
         self._zoom = 1.0
@@ -129,7 +131,10 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         if self.cameras:
             cam = self.cameras[self.active_cam]
             K = np.array(cam.intrinsics, dtype=float)
-            fov = np.degrees(2 * np.arctan(self.image_width / (2 * K[0, 0])))
+            # gluPerspective expects the vertical field of view. Use fy and
+            # image height to compute it so the background image exactly fits
+            # the viewport without black borders.
+            fov = np.degrees(2 * np.arctan(self.image_height / (2 * K[1, 1])))
             R = np.array(cam.rotation, dtype=float)
             t = np.array(cam.translation, dtype=float).reshape(3)
             eye = -R.T @ t
@@ -260,6 +265,10 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
             cam_pos + z_axis + (-half_w) * x_axis + (half_h) * y_axis,
         ]
 
+        # Draw the image plane behind all 3D elements
+        glDisable(GL_DEPTH_TEST)
+        glDepthMask(GL_FALSE)
+
         glEnable(GL_TEXTURE_2D)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glColor3f(1.0, 1.0, 1.0)
@@ -275,6 +284,9 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
         glEnd()
         glBindTexture(GL_TEXTURE_2D, 0)
         glDisable(GL_TEXTURE_2D)
+
+        glDepthMask(GL_TRUE)
+        glEnable(GL_DEPTH_TEST)
 
     def _draw_overlay_elements(self):
         if not self.points:

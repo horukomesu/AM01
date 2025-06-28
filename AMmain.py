@@ -500,7 +500,7 @@ def on_locator_clicked(name: str):
                     main_window._current_axis = None
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
         if not main_window.axis_definition_mode and hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
     elif getattr(main_window, "measurement_definition_mode", False):
         tmp = getattr(main_window, "_scale_temp", [])
         if len(tmp) < 2:
@@ -517,13 +517,13 @@ def on_locator_clicked(name: str):
         main_window.measurement_definition_mode = False
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
         if hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
     elif getattr(main_window, "origin_selection_mode", False):
         main_window.origin_locator_name = name
         main_window.origin_selection_mode = False
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
         if hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
 def new_scene():
     exit_locator_mode()
     main_window.image_paths = []
@@ -704,6 +704,7 @@ def calibrate():
             scale_pair=getattr(main_window, "scale_pair", None),
             origin_name=getattr(main_window, "origin_locator_name", None),
         )
+        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
         main_window.viewer3D.show()
 
 

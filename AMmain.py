@@ -26,6 +26,7 @@ sys.path.insert(0, BASE_DIR)
 
 import AMUtilities
 importlib.reload(AMUtilities)
+from GLSceneView import GLSceneView
 
 
 import CameraCalibrator
@@ -405,6 +406,8 @@ def show_image(index: int, keep_view: bool = False):
             scale_line=scale_line,
             origin_pos=origin_pos,
         )
+        if hasattr(main_window, "viewer3D") and main_window.viewer3D.isVisible():
+            main_window.viewer3D.set_active_camera(index)
 
 
 def next_image():
@@ -433,6 +436,8 @@ def on_tree_selection_changed(current, _previous):
         main_window.selected_locator = None
         exit_locator_mode()
         show_image(data[1])
+        if hasattr(main_window, "viewer3D") and main_window.viewer3D.isVisible():
+            main_window.viewer3D.set_active_camera(data[1])
     elif data[0] == "locator":
         exit_locator_mode()
         main_window.selected_locator = data[1]
@@ -516,6 +521,8 @@ def new_scene():
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.hide()
     QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
 def import_images():
@@ -535,6 +542,8 @@ def import_images():
     else:
         main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
         main_window.viewer.set_markers([])
+        if hasattr(main_window, "viewer3D"):
+            main_window.viewer3D.hide()
 
 def save_scene():
     path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -666,6 +675,12 @@ def calibrate():
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
     update_tree()
     show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.set_scene(calibrator, err_dict)
+        if main_window.images:
+            main_window.viewer3D.image_width = main_window.images[0].width()
+        main_window.viewer3D.set_active_camera(getattr(main_window, "current_image_index", 0))
+        main_window.viewer3D.show()
 
 
 def compute_worldspace_transform(calibrator: CameraCalibrator):
@@ -834,15 +849,24 @@ try:
         main_window._scale_temp = []
 
         # Viewer setup inside MainFrame
-        layout = QtWidgets.QVBoxLayout(main_window.MainFrame)
+        layout = QtWidgets.QHBoxLayout(main_window.MainFrame)
         layout.setContentsMargins(0, 0, 0, 0)
-        main_window.viewer = ImageViewer(main_window.MainFrame)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, main_window.MainFrame)
+        main_window.viewer3D = GLSceneView(splitter)
+        main_window.viewer = ImageViewer(splitter)
+
         main_window.viewer.locator_added.connect(on_locator_added)
         main_window.viewer.locator_clicked.connect(on_locator_clicked)
         main_window.viewer.navigate.connect(
             lambda step: (next_image() if step > 0 else prev_image())
         )
-        layout.addWidget(main_window.viewer)
+
+        splitter.addWidget(main_window.viewer3D)
+        splitter.addWidget(main_window.viewer)
+        splitter.setSizes([800, 400])
+        layout.addWidget(splitter)
+        main_window.viewer3D.hide()
+        main_window.splitter = splitter
 
         # Tree selection and delete key
         main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)

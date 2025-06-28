@@ -24,6 +24,13 @@ except ImportError:
 
 FORMAT_VERSION = 1
 
+def error_to_color(error: float, min_err: float = 0.0, max_err: float = 10.0) -> QtGui.QColor:
+    """Convert a numeric error value to a QColor along a green-red gradient."""
+    t = np.clip((error - min_err) / (max_err - min_err), 0.0, 1.0)
+    r = int(255 * t)
+    g = int(255 * (1.0 - t))
+    return QtGui.QColor(r, g, 0)
+
 def load_images(paths: List[str]) -> List[QtGui.QImage]:
     """Load images from disk.
 

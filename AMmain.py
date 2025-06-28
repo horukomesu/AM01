@@ -408,6 +408,11 @@ def show_image(index: int, keep_view: bool = False):
         )
         if hasattr(main_window, "viewer3D") and main_window.viewer3D.isVisible():
             main_window.viewer3D.set_active_camera(index)
+            main_window.viewer3D.set_overlay_data(
+                axis_points=getattr(main_window, "axis_points", {}),
+                scale_pair=getattr(main_window, "scale_pair", None),
+                origin_name=getattr(main_window, "origin_locator_name", None),
+            )
 
 
 def next_image():
@@ -492,6 +497,8 @@ def on_locator_clicked(name: str):
                     main_window.axis_definition_mode = False
                     main_window._current_axis = None
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
+        if not main_window.axis_definition_mode and hasattr(main_window, "viewer3D"):
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
     elif getattr(main_window, "measurement_definition_mode", False):
         tmp = getattr(main_window, "_scale_temp", [])
         if len(tmp) < 2:
@@ -507,10 +514,14 @@ def on_locator_clicked(name: str):
         main_window._scale_temp = []
         main_window.measurement_definition_mode = False
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
+        if hasattr(main_window, "viewer3D"):
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
     elif getattr(main_window, "origin_selection_mode", False):
         main_window.origin_locator_name = name
         main_window.origin_selection_mode = False
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
+        if hasattr(main_window, "viewer3D"):
+            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
 def new_scene():
     exit_locator_mode()
     main_window.image_paths = []
@@ -522,6 +533,7 @@ def new_scene():
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
     if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.texture_ids.clear()
         main_window.viewer3D.hide()
     QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
@@ -536,6 +548,8 @@ def import_images():
     main_window.locators = []
     main_window.selected_locator = None
     main_window.image_errors = {}
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.load_images(main_window.images)
     update_tree()
     if main_window.images:
         show_image(0)
@@ -574,6 +588,8 @@ def load_scene():
     main_window.locators = scene["locators"]
     main_window.selected_locator = None
     main_window.image_errors = {}
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.load_images(main_window.images)
     update_tree()
     if main_window.images:
         show_image(0)
@@ -676,10 +692,16 @@ def calibrate():
     update_tree()
     show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
     if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.set_scene(calibrator, err_dict)
+        names = [loc["name"] for loc in main_window.locators]
+        main_window.viewer3D.set_scene(calibrator, err_dict, names)
         if main_window.images:
             main_window.viewer3D.image_width = main_window.images[0].width()
         main_window.viewer3D.set_active_camera(getattr(main_window, "current_image_index", 0))
+        main_window.viewer3D.set_overlay_data(
+            axis_points=getattr(main_window, "axis_points", {}),
+            scale_pair=getattr(main_window, "scale_pair", None),
+            origin_name=getattr(main_window, "origin_locator_name", None),
+        )
         main_window.viewer3D.show()
 
 
@@ -785,6 +807,8 @@ def define_worldspace():
     main_window.origin_selection_mode = False
     main_window.axis_points = {"X": [], "Y": [], "Z": []}
     main_window._current_axis = "X"
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
     QtWidgets.QMessageBox.information(
         main_window,
         "Worldspace",
@@ -797,6 +821,8 @@ def define_reference_distance():
     main_window.measurement_definition_mode = True
     main_window.origin_selection_mode = False
     main_window._scale_temp = []
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
     QtWidgets.QMessageBox.information(
         main_window,
         "Reference Distance",
@@ -808,6 +834,8 @@ def set_center():
     main_window.axis_definition_mode = False
     main_window.measurement_definition_mode = False
     main_window.origin_selection_mode = True
+    if hasattr(main_window, "viewer3D"):
+        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
     QtWidgets.QMessageBox.information(
         main_window,
         "Set Center",
@@ -851,22 +879,29 @@ try:
         # Viewer setup inside MainFrame
         layout = QtWidgets.QHBoxLayout(main_window.MainFrame)
         layout.setContentsMargins(0, 0, 0, 0)
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal, main_window.MainFrame)
-        main_window.viewer3D = GLSceneView(splitter)
-        main_window.viewer = ImageViewer(splitter)
+        main_window.viewer = ImageViewer(main_window.MainFrame)
+        main_window.viewer3D = GLSceneView(main_window.MainFrame)
 
         main_window.viewer.locator_added.connect(on_locator_added)
-        main_window.viewer.locator_clicked.connect(on_locator_clicked)
         main_window.viewer.navigate.connect(
             lambda step: (next_image() if step > 0 else prev_image())
         )
+        main_window.viewer3D.locator_clicked.connect(on_locator_clicked)
 
-        splitter.addWidget(main_window.viewer3D)
-        splitter.addWidget(main_window.viewer)
-        splitter.setSizes([800, 400])
-        layout.addWidget(splitter)
+        layout.addWidget(main_window.viewer)
+        main_window.viewer3D.setGeometry(main_window.viewer.geometry())
+        main_window.viewer3D.raise_()
         main_window.viewer3D.hide()
-        main_window.splitter = splitter
+
+        class _OverlayUpdater(QtCore.QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QtCore.QEvent.Resize:
+                    main_window.viewer3D.setGeometry(main_window.viewer.geometry())
+                return super().eventFilter(obj, event)
+
+        main_window._overlay_updater = _OverlayUpdater(main_window.MainFrame)
+        main_window.MainFrame.installEventFilter(main_window._overlay_updater)
+        main_window.viewer.installEventFilter(main_window._overlay_updater)
 
         # Tree selection and delete key
         main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)

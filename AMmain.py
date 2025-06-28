@@ -647,7 +647,6 @@ def calibrate():
         return
 
     main_window.calibration = calibrator
-    apply_worldspace_transform(calibrator)
     err_dict = calibrator.get_reprojection_error() or {}
     for idx, loc in enumerate(getattr(main_window, "locators", [])):
         loc["error"] = err_dict.get(str(idx), None)
@@ -669,10 +668,10 @@ def calibrate():
     show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
 
-def apply_worldspace_transform(calibrator: CameraCalibrator):
+def compute_worldspace_transform(calibrator: CameraCalibrator):
     axes = getattr(main_window, "axis_points", {})
     if not calibrator.calibration_results or not axes:
-        return
+        return np.eye(3), np.zeros(3), 1.0
 
     def loc_3d(name: str):
         for idx, loc in enumerate(getattr(main_window, "locators", [])):
@@ -685,26 +684,28 @@ def apply_worldspace_transform(calibrator: CameraCalibrator):
     pts = {}
     for axis, pair in axes.items():
         if len(pair) != 2:
-            return
+            return np.eye(3), np.zeros(3), 1.0
         p1 = loc_3d(pair[0])
         p2 = loc_3d(pair[1])
         if p1 is None or p2 is None:
-            return
+            return np.eye(3), np.zeros(3), 1.0
         pts[axis] = (p1, p2)
 
     x = pts.get("X")
     y = pts.get("Y")
     z = pts.get("Z")
     if not (x and y and z):
-        return
+        return np.eye(3), np.zeros(3), 1.0
 
     def norm(v):
         n = np.linalg.norm(v)
         return v / n if n else v
 
     Rx = norm(x[1] - x[0])
-    Ry = norm(y[1] - y[0])
-    Rz = norm(z[1] - z[0])
+    Ry_temp = y[1] - y[0]
+    Ry = norm(Ry_temp - np.dot(Ry_temp, Rx) * Rx)
+    Rz_temp = z[1] - z[0]
+    Rz = norm(Rz_temp - np.dot(Rz_temp, Rx) * Rx - np.dot(Rz_temp, Ry) * Ry)
     R = np.column_stack((Rx, Ry, Rz))
 
     origin = np.zeros(3)
@@ -722,16 +723,7 @@ def apply_worldspace_transform(calibrator: CameraCalibrator):
             if measured > 1e-8:
                 scale = float(main_window.known_distance) / measured
 
-    for i, pt in enumerate(calibrator.calibration_results["points_3d"]):
-        p = np.array(pt, dtype=float)
-        p_new = scale * (R.T @ (p - origin))
-        calibrator.calibration_results["points_3d"][i] = p_new.tolist()
-
-    for img_idx, pose in calibrator.calibration_results["poses"].items():
-        Rcw = np.array(pose["R"], dtype=float)
-        tcw = np.array(pose["t"], dtype=float)
-        pose["R"] = (R.T @ Rcw).tolist()
-        pose["t"] = (scale * (R.T @ (tcw - origin))).tolist()
+    return R, origin, scale
 
 
 
@@ -749,10 +741,14 @@ def move_to_scene():
         )
         return
     try:
+        R, origin, scale = compute_worldspace_transform(main_window.calibration)
         AMUtilities.export_calibration_to_max(
             calibrator=main_window.calibration,
             image_paths=main_window.image_paths,
             locator_names=[f"pt{i}" for i in range(len(main_window.calibration.get_points_3d()))],
+            world_R=R,
+            world_origin=origin,
+            world_scale=scale,
         )
         QtWidgets.QMessageBox.information(
             main_window, "Move to Scene", "Exported cameras and locators to 3ds Max scene."

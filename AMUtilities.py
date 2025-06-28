@@ -13,13 +13,14 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
-import math
 import numpy as np
 
 
 from CameraCalibrator import CameraCalibrator
-
-from PySide2 import QtGui
+try:
+    from PySide2 import QtGui
+except ImportError:
+    from PySide6 import QtGui
 
 FORMAT_VERSION = 1
 

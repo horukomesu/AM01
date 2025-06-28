@@ -6,9 +6,20 @@
 import sys
 import os
 from pathlib import Path
-from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
+
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
+    QShortcutBase = QtWidgets.QShortcut
+except ImportError:
+    from PySide6 import QtWidgets, QtCore, QtGui, QtUiTools
+    QShortcutBase = QtGui.QShortcut
+
+
+
 import numpy as np
 import importlib
+import site
+print(site.getusersitepackages())
 
 BASE_DIR = os.path.dirname(__file__)
 sys.path.insert(0, BASE_DIR)
@@ -16,9 +27,6 @@ sys.path.insert(0, BASE_DIR)
 import AMUtilities
 importlib.reload(AMUtilities)
 
-
-import AMCalibrationPlotter
-importlib.reload(AMCalibrationPlotter)
 
 import CameraCalibrator
 importlib.reload(CameraCalibrator)
@@ -532,8 +540,10 @@ try:
         main_window._esc_filter = _EscFilter(main_window.viewer)
         main_window.viewer.installEventFilter(main_window._esc_filter)
 
-        QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Right), main_window, next_image)
-        QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Left), main_window, prev_image)
+        QShortcutBase(QtGui.QKeySequence(QtCore.Qt.Key_Right), main_window).activated.connect(next_image)
+        QShortcutBase(QtGui.QKeySequence(QtCore.Qt.Key_Left), main_window).activated.connect(prev_image)
+
+
 
         # Toolbar buttons
         main_window.btnAddLoc.clicked.connect(add_locator)

@@ -379,3 +379,65 @@ class CameraCalibrator:
             errors[str(set_id)] = total_err / count if count else float("inf")
 
         return errors
+
+    def get_reprojection_errors_per_image(self) -> Optional[Dict[int, float]]:
+        """Return reprojection error for each registered image."""
+        if not self.calibration_results or not self.point_data:
+            return None
+
+        proj_mats: Dict[int, np.ndarray] = {}
+        for img_idx in self.calibration_results["registered_indices"]:
+            intr = self.calibration_results["intrinsics"].get(img_idx)
+            pose = self.calibration_results["poses"].get(img_idx)
+            if not intr or not pose:
+                continue
+            K = np.array(intr["K"], dtype=np.float64)
+            R_c2w = np.array(pose["R"], dtype=np.float64)
+            t_c2w = np.array(pose["t"], dtype=np.float64).reshape(3, 1)
+            R_w2c = R_c2w.T
+            t_w2c = -R_w2c @ t_c2w
+            P = K @ np.hstack((R_w2c, t_w2c))
+            proj_mats[img_idx] = P
+
+        def triangulate(obs: Dict[int, Tuple[float, float]]):
+            A = []
+            for img_idx, (x, y) in obs.items():
+                if img_idx not in proj_mats:
+                    continue
+                P = proj_mats[img_idx]
+                A.append(x * P[2] - P[0])
+                A.append(y * P[2] - P[1])
+            if len(A) < 4:
+                return None
+            A = np.stack(A, axis=0)
+            _, _, vt = np.linalg.svd(A)
+            X = vt[-1]
+            X /= X[3]
+            return X[:3]
+
+        totals: Dict[int, float] = {idx: 0.0 for idx in proj_mats}
+        counts: Dict[int, int] = {idx: 0 for idx in proj_mats}
+
+        for obs in self.point_data.values():
+            pt3d = triangulate(obs)
+            if pt3d is None:
+                continue
+            pt_h = np.hstack((pt3d, 1.0))
+            for img_idx, (x, y) in obs.items():
+                P = proj_mats.get(img_idx)
+                if P is None:
+                    continue
+                proj = P @ pt_h
+                proj /= proj[2]
+                err = np.linalg.norm(np.array([x, y]) - proj[:2])
+                totals[img_idx] += err
+                counts[img_idx] += 1
+
+        errors: Dict[int, float] = {}
+        for idx in proj_mats:
+            if counts[idx]:
+                errors[idx] = totals[idx] / counts[idx]
+            else:
+                errors[idx] = float("inf")
+
+        return errors

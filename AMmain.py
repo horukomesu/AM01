@@ -210,9 +210,16 @@ def update_tree():
 
     img_root = QtWidgets.QTreeWidgetItem(tree, ["Images"])
     img_root.setData(0, QtCore.Qt.UserRole, ("images_root",))
+    img_errors = getattr(main_window, "image_errors", {})
     for idx, path in enumerate(main_window.image_paths):
         item = QtWidgets.QTreeWidgetItem(img_root, [Path(path).name])
         item.setData(0, QtCore.Qt.UserRole, ("image", idx))
+        err = img_errors.get(idx)
+        if err is not None:
+            color = AMUtilities.error_to_color(err)
+            icon = QtGui.QPixmap(16, 16)
+            icon.fill(color)
+            item.setIcon(0, QtGui.QIcon(icon))
 
     loc_root = QtWidgets.QTreeWidgetItem(tree, ["Locators"])
     loc_root.setData(0, QtCore.Qt.UserRole, ("loc_root",))
@@ -321,6 +328,7 @@ def new_scene():
     main_window.images = []
     main_window.locators = []
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
@@ -336,6 +344,7 @@ def import_images():
     main_window.images = AMUtilities.load_images(paths)
     main_window.locators = []
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     if main_window.images:
         show_image(0)
@@ -371,6 +380,7 @@ def load_scene():
     main_window.images = AMUtilities.load_images(main_window.image_paths)
     main_window.locators = scene["locators"]
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     if main_window.images:
         show_image(0)
@@ -453,6 +463,7 @@ def calibrate():
     err_dict = calibrator.get_reprojection_error() or {}
     for idx, loc in enumerate(getattr(main_window, "locators", [])):
         loc["error"] = err_dict.get(str(idx), None)
+    main_window.image_errors = calibrator.get_reprojection_errors_per_image() or {}
 
     msg = (
         f"Recovered {len(calibrator.get_camera_parameters())} cameras.\n"
@@ -461,6 +472,9 @@ def calibrate():
     if err_dict:
         avg_err = sum(err_dict.values()) / len(err_dict)
         msg += f"\nReprojection error: {avg_err:.4f}"
+    if main_window.image_errors:
+        avg_img_err = sum(main_window.image_errors.values()) / len(main_window.image_errors)
+        msg += f"\nImage error: {avg_img_err:.4f}"
 
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
     update_tree()
@@ -529,6 +543,7 @@ try:
         main_window.locators = []
         main_window.selected_locator = None
         main_window.locator_mode = False
+        main_window.image_errors = {}
 
         # Viewer setup inside MainFrame
         layout = QtWidgets.QVBoxLayout(main_window.MainFrame)

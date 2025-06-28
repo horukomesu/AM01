@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from PySide6 import QtWidgets, QtCore, QtGui
+try:
+    from PySide2 import QtWidgets, QtCore, QtGui
+except ImportError:
+    from PySide6 import QtWidgets, QtCore, QtGui
+
 from OpenGL.GL import *
-from OpenGL.GLU import gluPerspective, gluLookAt
+from OpenGL.GLU import gluPerspective, gluLookAt, gluNewQuadric, gluSphere
 from OpenGL.GLUT import (
     glutInit,
     glutSolidSphere,
@@ -48,7 +52,7 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
             self.image_width = conv.width()
             self.image_height = conv.height()
             ptr = conv.bits()
-            ptr.setsize(conv.byteCount())
+            buf = memoryview(ptr)[:conv.byteCount()]
             glTexImage2D(
                 GL_TEXTURE_2D,
                 0,
@@ -58,7 +62,7 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
                 0,
                 GL_RGBA,
                 GL_UNSIGNED_BYTE,
-                ptr.asstring(conv.byteCount()),
+                buf,
             )
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -143,13 +147,14 @@ class GLSceneView(QtWidgets.QOpenGLWidget):
     # --- Drawing helpers ----------------------------------------------------
     def _draw_points(self):
         glEnable(GL_DEPTH_TEST)
+        quadric = gluNewQuadric()
         for idx, pt in enumerate(self.points):
             err = self.errors.get(str(idx), 0.0)
             color = AMUtilities.error_to_color(err)
             glColor3f(color.redF(), color.greenF(), color.blueF())
             glPushMatrix()
             glTranslatef(float(pt[0]), float(pt[1]), float(pt[2]))
-            glutSolidSphere(0.02, 8, 8)
+            gluSphere(quadric, 0.02, 8, 8)
             glPopMatrix()
             if idx < len(self.locator_names):
                 name = self.locator_names[idx]

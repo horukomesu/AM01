@@ -26,6 +26,8 @@ sys.path.insert(0, BASE_DIR)
 
 import AMUtilities
 importlib.reload(AMUtilities)
+import GLSceneView
+importlib.reload(GLSceneView)
 from GLSceneView import GLSceneView
 
 

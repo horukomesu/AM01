@@ -90,24 +90,32 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.mark_items = []
         for m in markers:
             self._add_marker_item(
-                m["x"], m["y"], m.get("name", ""), m.get("name") == highlight_name
+                m["x"],
+                m["y"],
+                m.get("name", ""),
+                m.get("name") == highlight_name,
+                m.get("error")
             )
 
-    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False):
-        rect = QtCore.QRectF(-5, -5, 10, 10)
-        item = QtWidgets.QGraphicsEllipseItem(rect)
-        color = QtCore.Qt.green if highlight else QtCore.Qt.red
-        item.setBrush(QtGui.QBrush(color))
-        item.setPen(QtGui.QPen(QtCore.Qt.black))
+    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False, error: float = 0.0):
+        color = AMUtilities.error_to_color(error or 0.0)
+        pen = QtGui.QPen(color)
+        pen.setWidth(2 if highlight else 1)
         pos = QtCore.QPointF(x_norm * self.sceneRect().width(), y_norm * self.sceneRect().height())
-        item.setPos(pos)
-        item.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
-        self.scene().addItem(item)
+
+        line1 = QtWidgets.QGraphicsLineItem(-5, 0, 5, 0)
+        line2 = QtWidgets.QGraphicsLineItem(0, -5, 0, 5)
+        for line in (line1, line2):
+            line.setPen(pen)
+            line.setPos(pos)
+            line.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+            self.scene().addItem(line)
+            self.mark_items.append(line)
+
         text = QtWidgets.QGraphicsSimpleTextItem(name)
         text.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
         text.setPos(pos + QtCore.QPointF(6, -6))
         self.scene().addItem(text)
-        self.mark_items.append(item)
         self.mark_items.append(text)
 
     def mousePressEvent(self, event):
@@ -186,7 +194,12 @@ def get_image_markers(index: int):
     for loc in getattr(main_window, "locators", []):
         pos = loc.get("positions", {}).get(index)
         if pos:
-            markers.append({"name": loc["name"], "x": pos["x"], "y": pos["y"]})
+            markers.append({
+                "name": loc["name"],
+                "x": pos["x"],
+                "y": pos["y"],
+                "error": loc.get("error")
+            })
     return markers
 
 
@@ -197,15 +210,26 @@ def update_tree():
 
     img_root = QtWidgets.QTreeWidgetItem(tree, ["Images"])
     img_root.setData(0, QtCore.Qt.UserRole, ("images_root",))
+    img_errors = getattr(main_window, "image_errors", {})
     for idx, path in enumerate(main_window.image_paths):
         item = QtWidgets.QTreeWidgetItem(img_root, [Path(path).name])
         item.setData(0, QtCore.Qt.UserRole, ("image", idx))
+        err = img_errors.get(idx)
+        if err is not None:
+            color = AMUtilities.error_to_color(err)
+            icon = QtGui.QPixmap(16, 16)
+            icon.fill(color)
+            item.setIcon(0, QtGui.QIcon(icon))
 
     loc_root = QtWidgets.QTreeWidgetItem(tree, ["Locators"])
     loc_root.setData(0, QtCore.Qt.UserRole, ("loc_root",))
     for loc in getattr(main_window, "locators", []):
         item = QtWidgets.QTreeWidgetItem(loc_root, [loc["name"]])
         item.setData(0, QtCore.Qt.UserRole, ("locator", loc["name"]))
+        color = AMUtilities.error_to_color(loc.get("error", 0.0))
+        icon = QtGui.QPixmap(16, 16)
+        icon.fill(color)
+        item.setIcon(0, QtGui.QIcon(icon))
 
     img_root.setExpanded(True)
     loc_root.setExpanded(True)
@@ -304,6 +328,7 @@ def new_scene():
     main_window.images = []
     main_window.locators = []
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
@@ -319,6 +344,7 @@ def import_images():
     main_window.images = AMUtilities.load_images(paths)
     main_window.locators = []
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     if main_window.images:
         show_image(0)
@@ -354,6 +380,7 @@ def load_scene():
     main_window.images = AMUtilities.load_images(main_window.image_paths)
     main_window.locators = scene["locators"]
     main_window.selected_locator = None
+    main_window.image_errors = {}
     update_tree()
     if main_window.images:
         show_image(0)
@@ -433,15 +460,25 @@ def calibrate():
         return
 
     main_window.calibration = calibrator
-    error = calibrator.get_reprojection_error()
+    err_dict = calibrator.get_reprojection_error() or {}
+    for idx, loc in enumerate(getattr(main_window, "locators", [])):
+        loc["error"] = err_dict.get(str(idx), None)
+    main_window.image_errors = calibrator.get_reprojection_errors_per_image() or {}
+
     msg = (
         f"Recovered {len(calibrator.get_camera_parameters())} cameras.\n"
         f"3D points: {len(calibrator.get_points_3d())}"
     )
-    if error is not None:
-        msg += f"\nReprojection error: {error:.4f}"
+    if err_dict:
+        avg_err = sum(err_dict.values()) / len(err_dict)
+        msg += f"\nReprojection error: {avg_err:.4f}"
+    if main_window.image_errors:
+        avg_img_err = sum(main_window.image_errors.values()) / len(main_window.image_errors)
+        msg += f"\nImage error: {avg_img_err:.4f}"
 
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
+    update_tree()
+    show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
 
 
@@ -506,6 +543,7 @@ try:
         main_window.locators = []
         main_window.selected_locator = None
         main_window.locator_mode = False
+        main_window.image_errors = {}
 
         # Viewer setup inside MainFrame
         layout = QtWidgets.QVBoxLayout(main_window.MainFrame)

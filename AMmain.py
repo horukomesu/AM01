@@ -600,11 +600,8 @@ def load_scene():
         main_window.viewer.set_markers([])
 
 
-def open_recent_project(action):
-    project_name = action.text()
-    QtWidgets.QMessageBox.information(main_window, "Recent Project", f"Clicked on: {project_name}")
-    # Здесь можешь вставить логику загрузки проекта по имени или пути
-
+def open_recent_project():
+    QtWidgets.QMessageBox.information(main_window, "Recent", "Recent projects not implemented.")
 
 def preferences():
     QtWidgets.QMessageBox.information(main_window, "Preferences", "Preferences dialog not implemented.")
@@ -949,10 +946,7 @@ try:
         main_window.actionSave.triggered.connect(save_scene)
         main_window.actionSave_As.triggered.connect(save_scene_as)
         main_window.actionLoad.triggered.connect(import_images)
-        # Подключаем каждую QAction из меню "Recent Projects"
-        for action in main_window.menuRecent_Projects.actions():
-            action.triggered.connect(lambda _, a=action: open_recent_project(a))
-
+        main_window.actionRecent_Projects.triggered.connect(open_recent_project)
         main_window.actionPreferences.triggered.connect(preferences)
         main_window.actionUndo.triggered.connect(undo)
         main_window.actionRedo.triggered.connect(redo)

@@ -15,7 +15,7 @@ except ImportError:
     QShortcutBase = QtGui.QShortcut
 
 
-from typing import Optional
+
 import numpy as np
 import importlib
 import site
@@ -26,9 +26,6 @@ sys.path.insert(0, BASE_DIR)
 
 import AMUtilities
 importlib.reload(AMUtilities)
-import GLSceneView
-importlib.reload(GLSceneView)
-from GLSceneView import GLSceneView
 
 
 import CameraCalibrator
@@ -45,7 +42,6 @@ class ImageViewer(QtWidgets.QGraphicsView):
 
     locator_added = QtCore.Signal(float, float)
     navigate = QtCore.Signal(int)  # emit +1/-1 to switch images
-    locator_clicked = QtCore.Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,7 +49,6 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self._pixmap = QtWidgets.QGraphicsPixmapItem()
         self.scene().addItem(self._pixmap)
         self.mark_items = []
-        self.marker_info = []
 
         self.setRenderHints(
             QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform
@@ -89,91 +84,21 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.resetTransform()
             self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
 
-    def set_markers(self, markers, highlight_names=None, axis_lines=None, scale_line=None, origin_pos=None):
-        highlight_names = set(highlight_names or [])
+    def set_markers(self, markers, highlight_name=None):
         for item in self.mark_items:
             self.scene().removeItem(item)
         self.mark_items = []
-        self.marker_info = []
         for m in markers:
             self._add_marker_item(
                 m["x"],
                 m["y"],
                 m.get("name", ""),
-                m.get("name") in highlight_names,
-                m.get("error"),
-                QtGui.QColor("yellow") if m.get("name") in highlight_names else None
+                m.get("name") == highlight_name,
+                m.get("error")
             )
-            self.marker_info.append((m.get("name", ""), m["x"], m["y"]))
 
-        if axis_lines:
-            for line in axis_lines:
-                p1 = line.get("p1")
-                p2 = line.get("p2")
-                color = line.get("color", QtGui.QColor("white"))
-                pen = QtGui.QPen(color)
-                pen.setWidth(2)
-                if p1 and p2:
-                    line_item = QtWidgets.QGraphicsLineItem(
-                        p1[0] * self.sceneRect().width(),
-                        p1[1] * self.sceneRect().height(),
-                        p2[0] * self.sceneRect().width(),
-                        p2[1] * self.sceneRect().height()
-                    )
-                    line_item.setPen(pen)
-                    line_item.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
-                    self.scene().addItem(line_item)
-                    self.mark_items.append(line_item)
-                    mid = QtCore.QPointF(
-                        (p1[0] + p2[0]) / 2 * self.sceneRect().width(),
-                        (p1[1] + p2[1]) / 2 * self.sceneRect().height()
-                    )
-                else:
-                    pt = p1 or p2
-                    if pt is None:
-                        continue
-                    mid = QtCore.QPointF(
-                        pt[0] * self.sceneRect().width(),
-                        pt[1] * self.sceneRect().height()
-                    )
-                text = QtWidgets.QGraphicsSimpleTextItem(line.get("axis", ""))
-                text.setBrush(QtGui.QBrush(color))
-                text.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
-                text.setPos(mid + QtCore.QPointF(6, -6))
-                self.scene().addItem(text)
-                self.mark_items.append(text)
-
-        if scale_line and scale_line.get("p1") and scale_line.get("p2"):
-            p1 = scale_line["p1"]
-            p2 = scale_line["p2"]
-            pen = QtGui.QPen(QtGui.QColor("yellow"))
-            pen.setWidth(2)
-            line_item = QtWidgets.QGraphicsLineItem(
-                p1[0] * self.sceneRect().width(),
-                p1[1] * self.sceneRect().height(),
-                p2[0] * self.sceneRect().width(),
-                p2[1] * self.sceneRect().height()
-            )
-            line_item.setPen(pen)
-            line_item.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
-            self.scene().addItem(line_item)
-            self.mark_items.append(line_item)
-
-        if origin_pos:
-            pos = QtCore.QPointF(
-                origin_pos[0] * self.sceneRect().width(),
-                origin_pos[1] * self.sceneRect().height()
-            )
-            text = QtWidgets.QGraphicsSimpleTextItem("O")
-            text.setBrush(QtGui.QBrush(QtGui.QColor("white")))
-            text.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
-            text.setPos(pos + QtCore.QPointF(6, -6))
-            self.scene().addItem(text)
-            self.mark_items.append(text)
-
-    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False, error: float = 0.0, color: Optional[QtGui.QColor] = None):
-        if color is None:
-            color = AMUtilities.error_to_color(error or 0.0)
+    def _add_marker_item(self, x_norm: float, y_norm: float, name: str, highlight: bool = False, error: float = 0.0):
+        color = AMUtilities.error_to_color(error or 0.0)
         pen = QtGui.QPen(color)
         pen.setWidth(2 if highlight else 1)
         pos = QtCore.QPointF(x_norm * self.sceneRect().width(), y_norm * self.sceneRect().height())
@@ -193,12 +118,6 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.scene().addItem(text)
         self.mark_items.append(text)
 
-    def _locator_at(self, x_norm: float, y_norm: float, thresh: float = 0.02):
-        for name, x, y in self.marker_info:
-            if ((x - x_norm) ** 2 + (y - y_norm) ** 2) ** 0.5 <= thresh:
-                return name
-        return None
-
     def mousePressEvent(self, event):
         if self.adding_locator:
             if event.button() == QtCore.Qt.LeftButton:
@@ -207,20 +126,6 @@ class ImageViewer(QtWidgets.QGraphicsView):
                 y_norm = pos.y() / self.sceneRect().height()
                 self.locator_added.emit(x_norm, y_norm)
                 return
-
-        if event.button() == QtCore.Qt.LeftButton:
-            if any([
-                getattr(main_window, "axis_definition_mode", False),
-                getattr(main_window, "measurement_definition_mode", False),
-                getattr(main_window, "origin_selection_mode", False),
-            ]):
-                pos = self.mapToScene(event.pos())
-                x_norm = pos.x() / self.sceneRect().width()
-                y_norm = pos.y() / self.sceneRect().height()
-                name = self._locator_at(x_norm, y_norm)
-                if name:
-                    self.locator_clicked.emit(name)
-                    return
 
         if event.button() == QtCore.Qt.MiddleButton:
             self._panning = True
@@ -339,13 +244,6 @@ def get_next_locator_name() -> str:
     return f"loc{idx}"
 
 
-def _find_locator(name: str):
-    for loc in getattr(main_window, "locators", []):
-        if loc["name"] == name:
-            return loc
-    return None
-
-
 def exit_locator_mode():
     """Reset locator placement mode."""
     main_window.locator_mode = False
@@ -357,64 +255,8 @@ def show_image(index: int, keep_view: bool = False):
     if 0 <= index < len(main_window.images):
         main_window.current_image_index = index
         main_window.viewer.load_image(main_window.images[index], keep_transform=keep_view)
-        highlight_names = set()
-        if getattr(main_window, "selected_locator", None):
-            highlight_names.add(main_window.selected_locator)
-        if getattr(main_window, "scale_pair", None):
-            highlight_names.update(main_window.scale_pair)
-
-        axis_lines = []
-        colors = {"X": QtGui.QColor("red"), "Y": QtGui.QColor("green"), "Z": QtGui.QColor("blue")}
-        for axis, pair in getattr(main_window, "axis_points", {}).items():
-            if len(pair) != 2:
-                continue
-            loc1 = _find_locator(pair[0])
-            loc2 = _find_locator(pair[1])
-            p1 = loc1.get("positions", {}).get(index) if loc1 else None
-            p2 = loc2.get("positions", {}).get(index) if loc2 else None
-            if not p1 and not p2:
-                continue
-            axis_lines.append({
-                "axis": axis,
-                "p1": (p1["x"], p1["y"]) if p1 else None,
-                "p2": (p2["x"], p2["y"]) if p2 else None,
-                "color": colors.get(axis, QtGui.QColor("white"))
-            })
-
-        scale_line = None
-        if getattr(main_window, "scale_pair", None):
-            loc1 = _find_locator(main_window.scale_pair[0])
-            loc2 = _find_locator(main_window.scale_pair[1])
-            p1 = loc1.get("positions", {}).get(index) if loc1 else None
-            p2 = loc2.get("positions", {}).get(index) if loc2 else None
-            if p1 or p2:
-                scale_line = {
-                    "names": main_window.scale_pair,
-                    "p1": (p1["x"], p1["y"]) if p1 else None,
-                    "p2": (p2["x"], p2["y"]) if p2 else None,
-                }
-
-        origin_pos = None
-        if getattr(main_window, "origin_locator_name", None):
-            loc = _find_locator(main_window.origin_locator_name)
-            pos = loc.get("positions", {}).get(index) if loc else None
-            if pos:
-                origin_pos = (pos["x"], pos["y"])
-
-        main_window.viewer.set_markers(
-            get_image_markers(index),
-            highlight_names=highlight_names,
-            axis_lines=axis_lines,
-            scale_line=scale_line,
-            origin_pos=origin_pos,
-        )
-        if hasattr(main_window, "viewer3D") and main_window.viewer3D.isVisible():
-            main_window.viewer3D.set_active_camera(index)
-            main_window.viewer3D.set_overlay_data(
-                axis_points=getattr(main_window, "axis_points", {}),
-                scale_pair=getattr(main_window, "scale_pair", None),
-                origin_name=getattr(main_window, "origin_locator_name", None),
-            )
+        highlight = getattr(main_window, "selected_locator", None)
+        main_window.viewer.set_markers(get_image_markers(index), highlight)
 
 
 def next_image():
@@ -443,8 +285,6 @@ def on_tree_selection_changed(current, _previous):
         main_window.selected_locator = None
         exit_locator_mode()
         show_image(data[1])
-        if hasattr(main_window, "viewer3D") and main_window.viewer3D.isVisible():
-            main_window.viewer3D.set_active_camera(data[1])
     elif data[0] == "locator":
         exit_locator_mode()
         main_window.selected_locator = data[1]
@@ -482,48 +322,6 @@ def on_locator_added(x_norm: float, y_norm: float):
     loc.setdefault("positions", {})[idx] = {"x": x_norm, "y": y_norm}
     update_tree()
     show_image(idx, keep_view=True)
-
-
-def on_locator_clicked(name: str):
-    if getattr(main_window, "axis_definition_mode", False):
-        axis = getattr(main_window, "_current_axis", "X")
-        main_window.axis_points.setdefault(axis, [])
-        if len(main_window.axis_points[axis]) < 2:
-            main_window.axis_points[axis].append(name)
-            if len(main_window.axis_points[axis]) == 2:
-                if axis == "X":
-                    main_window._current_axis = "Y"
-                elif axis == "Y":
-                    main_window._current_axis = "Z"
-                else:
-                    main_window.axis_definition_mode = False
-                    main_window._current_axis = None
-        show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
-        if not main_window.axis_definition_mode and hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-    elif getattr(main_window, "measurement_definition_mode", False):
-        tmp = getattr(main_window, "_scale_temp", [])
-        if len(tmp) < 2:
-            tmp.append(name)
-            main_window._scale_temp = tmp
-        if len(tmp) == 2:
-            dist, ok = QtWidgets.QInputDialog.getDouble(
-                main_window, "Reference Distance", "distance (m):", decimals=3
-            )
-            if ok:
-                main_window.known_distance = float(dist)
-                main_window.scale_pair = tuple(tmp)
-        main_window._scale_temp = []
-        main_window.measurement_definition_mode = False
-        show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
-        if hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-    elif getattr(main_window, "origin_selection_mode", False):
-        main_window.origin_locator_name = name
-        main_window.origin_selection_mode = False
-        show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
-        if hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
 def new_scene():
     exit_locator_mode()
     main_window.image_paths = []
@@ -534,9 +332,6 @@ def new_scene():
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.texture_ids.clear()
-        main_window.viewer3D.hide()
     QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
 def import_images():
@@ -550,16 +345,12 @@ def import_images():
     main_window.locators = []
     main_window.selected_locator = None
     main_window.image_errors = {}
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.load_images(main_window.images)
     update_tree()
     if main_window.images:
         show_image(0)
     else:
         main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
         main_window.viewer.set_markers([])
-        if hasattr(main_window, "viewer3D"):
-            main_window.viewer3D.hide()
 
 def save_scene():
     path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -590,8 +381,6 @@ def load_scene():
     main_window.locators = scene["locators"]
     main_window.selected_locator = None
     main_window.image_errors = {}
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.load_images(main_window.images)
     update_tree()
     if main_window.images:
         show_image(0)
@@ -600,8 +389,11 @@ def load_scene():
         main_window.viewer.set_markers([])
 
 
-def open_recent_project():
-    QtWidgets.QMessageBox.information(main_window, "Recent", "Recent projects not implemented.")
+def open_recent_project(action):
+    project_name = action.text()
+    QtWidgets.QMessageBox.information(main_window, "Recent Project", f"Clicked on: {project_name}")
+    # Здесь можешь вставить логику загрузки проекта по имени или пути
+
 
 def preferences():
     QtWidgets.QMessageBox.information(main_window, "Preferences", "Preferences dialog not implemented.")
@@ -690,77 +482,6 @@ def calibrate():
     QtWidgets.QMessageBox.information(main_window, "Calibration Completed", msg)
     update_tree()
     show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
-    if hasattr(main_window, "viewer3D"):
-        names = [loc["name"] for loc in main_window.locators]
-        main_window.viewer3D.set_scene(calibrator, err_dict, names)
-        if main_window.images:
-            main_window.viewer3D.image_width = main_window.images[0].width()
-        main_window.viewer3D.set_active_camera(getattr(main_window, "current_image_index", 0))
-        main_window.viewer3D.set_overlay_data(
-            axis_points=getattr(main_window, "axis_points", {}),
-            scale_pair=getattr(main_window, "scale_pair", None),
-            origin_name=getattr(main_window, "origin_locator_name", None),
-        )
-        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-        main_window.viewer3D.show()
-
-
-def compute_worldspace_transform(calibrator: CameraCalibrator):
-    axes = getattr(main_window, "axis_points", {})
-    if not calibrator.calibration_results or not axes:
-        return np.eye(3), np.zeros(3), 1.0
-
-    def loc_3d(name: str):
-        for idx, loc in enumerate(getattr(main_window, "locators", [])):
-            if loc["name"] == name:
-                pts = calibrator.get_points_3d()
-                if idx < len(pts):
-                    return np.array(pts[idx], dtype=float)
-        return None
-
-    pts = {}
-    for axis, pair in axes.items():
-        if len(pair) != 2:
-            return np.eye(3), np.zeros(3), 1.0
-        p1 = loc_3d(pair[0])
-        p2 = loc_3d(pair[1])
-        if p1 is None or p2 is None:
-            return np.eye(3), np.zeros(3), 1.0
-        pts[axis] = (p1, p2)
-
-    x = pts.get("X")
-    y = pts.get("Y")
-    z = pts.get("Z")
-    if not (x and y and z):
-        return np.eye(3), np.zeros(3), 1.0
-
-    def norm(v):
-        n = np.linalg.norm(v)
-        return v / n if n else v
-
-    Rx = norm(x[1] - x[0])
-    Ry_temp = y[1] - y[0]
-    Ry = norm(Ry_temp - np.dot(Ry_temp, Rx) * Rx)
-    Rz_temp = z[1] - z[0]
-    Rz = norm(Rz_temp - np.dot(Rz_temp, Rx) * Rx - np.dot(Rz_temp, Ry) * Ry)
-    R = np.column_stack((Rx, Ry, Rz))
-
-    origin = np.zeros(3)
-    if getattr(main_window, "origin_locator_name", None):
-        o = loc_3d(main_window.origin_locator_name)
-        if o is not None:
-            origin = o
-
-    scale = 1.0
-    if getattr(main_window, "scale_pair", None) and main_window.known_distance:
-        p1 = loc_3d(main_window.scale_pair[0])
-        p2 = loc_3d(main_window.scale_pair[1])
-        if p1 is not None and p2 is not None:
-            measured = np.linalg.norm(p1 - p2)
-            if measured > 1e-8:
-                scale = float(main_window.known_distance) / measured
-
-    return R, origin, scale
 
 
 
@@ -778,14 +499,10 @@ def move_to_scene():
         )
         return
     try:
-        R, origin, scale = compute_worldspace_transform(main_window.calibration)
         AMUtilities.export_calibration_to_max(
             calibrator=main_window.calibration,
             image_paths=main_window.image_paths,
             locator_names=[f"pt{i}" for i in range(len(main_window.calibration.get_points_3d()))],
-            world_R=R,
-            world_origin=origin,
-            world_scale=scale,
         )
         QtWidgets.QMessageBox.information(
             main_window, "Move to Scene", "Exported cameras and locators to 3ds Max scene."
@@ -801,46 +518,10 @@ def move_to_scene():
 
 
 def define_worldspace():
-    exit_locator_mode()
-    main_window.axis_definition_mode = True
-    main_window.measurement_definition_mode = False
-    main_window.origin_selection_mode = False
-    main_window.axis_points = {"X": [], "Y": [], "Z": []}
-    main_window._current_axis = "X"
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-    QtWidgets.QMessageBox.information(
-        main_window,
-        "Worldspace",
-        "Select two locators for X, then Y and Z axes."
-    )
+    QtWidgets.QMessageBox.information(main_window, "Worldspace", "Define worldspace not implemented.")
 
 def define_reference_distance():
-    exit_locator_mode()
-    main_window.axis_definition_mode = False
-    main_window.measurement_definition_mode = True
-    main_window.origin_selection_mode = False
-    main_window._scale_temp = []
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-    QtWidgets.QMessageBox.information(
-        main_window,
-        "Reference Distance",
-        "Select two locators to define known distance."
-    )
-
-def set_center():
-    exit_locator_mode()
-    main_window.axis_definition_mode = False
-    main_window.measurement_definition_mode = False
-    main_window.origin_selection_mode = True
-    if hasattr(main_window, "viewer3D"):
-        main_window.viewer3D.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, False)
-    QtWidgets.QMessageBox.information(
-        main_window,
-        "Set Center",
-        "Click a locator to set as scene origin."
-    )
+    QtWidgets.QMessageBox.information(main_window, "Reference Distance", "Define reference distance not implemented.")
 
 def add_modeling_locator():
     QtWidgets.QMessageBox.information(main_window, "Modeling Locator", "Add modeling locator not implemented.")
@@ -866,42 +547,16 @@ try:
         main_window.selected_locator = None
         main_window.locator_mode = False
         main_window.image_errors = {}
-        main_window.axis_points = {"X": [], "Y": [], "Z": []}
-        main_window.scale_pair = None
-        main_window.known_distance = None
-        main_window.origin_locator_name = None
-        main_window.axis_definition_mode = False
-        main_window.measurement_definition_mode = False
-        main_window.origin_selection_mode = False
-        main_window._current_axis = None
-        main_window._scale_temp = []
 
         # Viewer setup inside MainFrame
-        layout = QtWidgets.QHBoxLayout(main_window.MainFrame)
+        layout = QtWidgets.QVBoxLayout(main_window.MainFrame)
         layout.setContentsMargins(0, 0, 0, 0)
         main_window.viewer = ImageViewer(main_window.MainFrame)
-        main_window.viewer3D = GLSceneView(main_window.MainFrame)
-
         main_window.viewer.locator_added.connect(on_locator_added)
         main_window.viewer.navigate.connect(
             lambda step: (next_image() if step > 0 else prev_image())
         )
-        main_window.viewer3D.locator_clicked.connect(on_locator_clicked)
-
         layout.addWidget(main_window.viewer)
-        main_window.viewer3D.setGeometry(main_window.viewer.geometry())
-        main_window.viewer3D.raise_()
-        main_window.viewer3D.hide()
-
-        class _OverlayUpdater(QtCore.QObject):
-            def eventFilter(self, obj, event):
-                if event.type() == QtCore.QEvent.Resize:
-                    main_window.viewer3D.setGeometry(main_window.viewer.geometry())
-                return super().eventFilter(obj, event)
-
-        main_window._overlay_updater = _OverlayUpdater(main_window.MainFrame)
-        main_window.MainFrame.installEventFilter(main_window._overlay_updater)
-        main_window.viewer.installEventFilter(main_window._overlay_updater)
 
         # Tree selection and delete key
         main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)
@@ -936,7 +591,6 @@ try:
         main_window.btnCalibrate.clicked.connect(calibrate)
         main_window.btnDFWS.clicked.connect(define_worldspace)
         main_window.btnDFMM.clicked.connect(define_reference_distance)
-        main_window.btnSetCenter.clicked.connect(set_center)
         main_window.btnLocMod.clicked.connect(add_modeling_locator)
         main_window.btnMoveToScene.clicked.connect(move_to_scene)
 
@@ -946,7 +600,10 @@ try:
         main_window.actionSave.triggered.connect(save_scene)
         main_window.actionSave_As.triggered.connect(save_scene_as)
         main_window.actionLoad.triggered.connect(import_images)
-        main_window.actionRecent_Projects.triggered.connect(open_recent_project)
+        # Подключаем каждую QAction из меню "Recent Projects"
+        for action in main_window.menuRecent_Projects.actions():
+            action.triggered.connect(lambda _, a=action: open_recent_project(a))
+
         main_window.actionPreferences.triggered.connect(preferences)
         main_window.actionUndo.triggered.connect(undo)
         main_window.actionRedo.triggered.connect(redo)

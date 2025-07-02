@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 import numpy as np
 
@@ -129,9 +129,6 @@ def export_calibration_to_max(
     calibrator: CameraCalibrator,
     image_paths: List[str],
     locator_names: List[str],
-    world_R: Optional[np.ndarray] = None,
-    world_origin: Optional[np.ndarray] = None,
-    world_scale: float = 1.0,
 ) -> None:
     import pymxs
     import math
@@ -155,11 +152,6 @@ def export_calibration_to_max(
     def as_point3(vec: np.ndarray):
         return rt.Point3(float(vec[0]), float(vec[1]), float(vec[2]))
 
-    if world_R is None:
-        world_R = np.eye(3, dtype=np.float32)
-    if world_origin is None:
-        world_origin = np.zeros(3, dtype=np.float32)
-
     if not calibrator.calibration_results:
         raise RuntimeError("No calibration results found.")
 
@@ -175,8 +167,7 @@ def export_calibration_to_max(
 
     for pt, name in zip(points_3d, locator_names):
         pt_cv = np.array(pt, dtype=np.float32).reshape(3)
-        pt_ws = world_scale * (world_R.T @ (pt_cv - world_origin))
-        pt_max = OPENCV_TO_MAX @ pt_ws
+        pt_max = OPENCV_TO_MAX @ pt_cv
         dummy = rt.Dummy(name=name)
         dummy.position = as_point3(pt_max)
 
@@ -189,11 +180,8 @@ def export_calibration_to_max(
         R = np.array(pose["R"], dtype=np.float32)
         t = np.array(pose["t"], dtype=np.float32).reshape(3)
 
-        R_ws = world_R.T @ R
-        t_ws = world_scale * (world_R.T @ (t - world_origin))
-
-        R_max = OPENCV_TO_MAX @ R_ws @ CAMERA_ROT
-        t_max = OPENCV_TO_MAX @ t_ws
+        R_max = OPENCV_TO_MAX @ R @ CAMERA_ROT
+        t_max = OPENCV_TO_MAX @ t
 
         # Сборка трансформа
         T = np.eye(4)

@@ -534,13 +534,23 @@
     <property name="title">
      <string>File</string>
     </property>
+    <widget class="QMenu" name="menuRecent_Projects">
+     <property name="title">
+      <string>Recent Projects</string>
+     </property>
+     <addaction name="recent1"/>
+     <addaction name="recent2"/>
+     <addaction name="recent3"/>
+     <addaction name="recent4"/>
+     <addaction name="recent5"/>
+    </widget>
     <addaction name="actionNEW"/>
     <addaction name="actionOpen"/>
     <addaction name="actionSave"/>
     <addaction name="actionSave_As"/>
     <addaction name="separator"/>
     <addaction name="actionLoad"/>
-    <addaction name="actionRecent_Projects"/>
+    <addaction name="menuRecent_Projects"/>
    </widget>
    <widget class="QMenu" name="menuEdit">
     <property name="title">
@@ -557,7 +567,7 @@
   <widget class="QDockWidget" name="dockWidget_4">
    <property name="minimumSize">
     <size>
-     <width>399</width>
+     <width>486</width>
      <height>70</height>
     </size>
    </property>
@@ -715,6 +725,25 @@
          </widget>
         </item>
         <item>
+         <widget class="QPushButton" name="btnSetCenter">
+          <property name="toolTip">
+           <string>Add Modeling Locator</string>
+          </property>
+          <property name="text">
+           <string>center</string>
+          </property>
+          <property name="iconSize">
+           <size>
+            <width>32</width>
+            <height>32</height>
+           </size>
+          </property>
+          <property name="flat">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
          <spacer name="horizontalSpacer">
           <property name="orientation">
            <enum>Qt::Orientation::Horizontal</enum>
@@ -754,7 +783,7 @@
     <set>QDockWidget::DockWidgetFeature::NoDockWidgetFeatures</set>
    </property>
    <property name="allowedAreas">
-    <set>Qt::DockWidgetArea::LeftDockWidgetArea</set>
+    <set>Qt::DockWidgetArea::LeftDockWidgetArea|Qt::DockWidgetArea::RightDockWidgetArea</set>
    </property>
    <property name="windowTitle">
     <string>Scene Browser</string>
@@ -817,11 +846,6 @@
     <string>Load Images...</string>
    </property>
   </action>
-  <action name="actionRecent_Projects">
-   <property name="text">
-    <string>Recent Projects</string>
-   </property>
-  </action>
   <action name="actionPreferences">
    <property name="text">
     <string>Preferences</string>
@@ -835,6 +859,31 @@
   <action name="actionRedo">
    <property name="text">
     <string>Redo</string>
+   </property>
+  </action>
+  <action name="recent1">
+   <property name="text">
+    <string/>
+   </property>
+  </action>
+  <action name="recent2">
+   <property name="text">
+    <string/>
+   </property>
+  </action>
+  <action name="recent3">
+   <property name="text">
+    <string/>
+   </property>
+  </action>
+  <action name="recent4">
+   <property name="text">
+    <string/>
+   </property>
+  </action>
+  <action name="recent5">
+   <property name="text">
+    <string/>
    </property>
   </action>
  </widget>

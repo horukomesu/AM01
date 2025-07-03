@@ -354,7 +354,7 @@ def import_images():
 
 def save_scene():
     path, _ = QtWidgets.QFileDialog.getSaveFileName(
-        main_window, "Save Scene", "", "JSON (*.json)"
+        main_window, "Save Scene", "", "ImageModeler Scene (*.rzi)"
     )
     if not path:
         return
@@ -371,7 +371,7 @@ def save_scene_as():
 def load_scene():
     exit_locator_mode()
     path, _ = QtWidgets.QFileDialog.getOpenFileName(
-        main_window, "Load Scene", "", "JSON (*.json)"
+        main_window, "Load Scene", "", "ImageModeler Scene (*.rzi)"
     )
     if not path:
         return

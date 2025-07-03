@@ -8,15 +8,26 @@ tested in isolation.
 """
 
 from __future__ import annotations
-
+import sys
+import os
 import json
 from pathlib import Path
 from typing import List, Dict, Any
+import importlib
 
 import numpy as np
 
+BASE_DIR = os.path.dirname(__file__)
+sys.path.insert(0, BASE_DIR)
+
+# Добавить рядом с другими импортами
+import AMRZI_IO
+importlib.reload(AMRZI_IO)
+from AMRZI_IO import read_rzi, write_rzi
 
 from CameraCalibrator import CameraCalibrator
+
+
 try:
     from PySide2 import QtGui
 except ImportError:
@@ -56,69 +67,117 @@ def save_scene(
     locators: List[Dict[str, Any]],
     path: str
 ) -> None:
-    """Сохраняет текущую сцену в JSON-файл.
+    """Сохраняет текущую сцену в .rzi (RZML-файл, совместимый с ImageModeler)."""
+    # Загружаем изображения, чтобы узнать разрешения
+    images = load_images(image_paths)
+    if not images:
+        raise RuntimeError("Нет доступных изображений для сохранения сцены.")
 
-    Parameters
-    ----------
-    image_paths : List[str]
-        Список путей к изображениям.
-    locators : List[Dict[str, Any]]
-        Список локаторов (имя, позиции на изображениях).
-    path : str
-        Путь к файлу для сохранения.
-    """
-    scene = {
-        "format_version": FORMAT_VERSION,
-        "images": list(image_paths),
-        "locators": list(locators),
+    width = images[0].width()
+    height = images[0].height()
+
+    # Примерный FOV по горизонтали — позже можно улучшить через CameraCalibrator
+    default_fovx = 60.0
+
+    rzi_data = {
+        "version": "1.4.3",
+        "path": str(Path(path).resolve()),
+        "locators": [],
+        "cameras": [{
+            "id": 1,
+            "name": "Camera Device",
+            "width": width,
+            "height": height,
+            "sensor_width": 42.6667,  # по умолчанию (можно сделать опцией)
+            "fovx": default_fovx,
+            "distortion_type": "disto3i",
+        }],
+        "shots": []
     }
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(scene, fh, indent=2, ensure_ascii=False)
+
+    for idx, img_path in enumerate(image_paths):
+        if idx >= len(images):  # safety
+            continue
+
+        shot = {
+            "id": idx + 1,
+            "filename": Path(img_path).name,
+            "camera_id": 1,
+            "width": images[idx].width(),
+            "height": images[idx].height(),
+            "fovx": default_fovx,
+            "rotation": {"x": -180},
+            "image_path": str(Path(img_path).resolve()),
+            "markers": []
+        }
+
+        for loc_idx, loc in enumerate(locators):
+            if "positions" in loc and idx in loc["positions"]:
+                pos = loc["positions"][idx]
+                shot["markers"].append({
+                    "locator_id": loc_idx + 1,
+                    "x": float(pos["x"]),
+                    "y": float(pos["y"]),
+                })
+
+        rzi_data["shots"].append(shot)
+
+    for loc_idx, loc in enumerate(locators):
+        rzi_data["locators"].append({
+            "id": loc_idx + 1,
+            "name": loc.get("name", f"loc{loc_idx+1}"),
+        })
+
+    write_rzi(path, rzi_data)
+
+
+
+def _clean_path(p: str) -> Path:
+    # Убираем начальные двойные слэши, заменяем на правильный путь
+    p = p.lstrip("/\\")  # удаляет начальные \ или /
+    return Path(p).expanduser()
+
+
 
 def load_scene(path: str) -> Dict[str, Any]:
-    """Загружает сцену из JSON. Проверяет структуру и версию.
-
-    Parameters
-    ----------
-    path : str
-        Путь к сцене.
-
-    Returns
-    -------
-    Dict[str, Any]
-        Словарь с ключами: "images", "locators".
-    """
     if not Path(path).is_file():
         raise FileNotFoundError(f"Scene file not found: {path}")
-    with open(path, "r", encoding="utf-8") as fh:
-        scene = json.load(fh)
+    
+    data = read_rzi(path)
+    base_dir = Path(path).parent
 
-    # Проверка структуры
-    if not isinstance(scene, dict):
-        raise ValueError("Scene file format error: not a dict")
-    if "images" not in scene or "locators" not in scene:
-        raise ValueError("Scene file missing required fields: images or locators")
-    if scene.get("format_version", 1) > FORMAT_VERSION:
-        raise ValueError("Scene file format version is newer than supported!")
+    image_paths = []
+    locators_map = {}
 
-    # Проверка путей
-    image_paths = [str(p) for p in scene.get("images", []) if Path(p).is_file()]
-    locators = list(scene.get("locators", []))
+    for shot in data.get("shots", []):
+        raw_path = shot.get("image_path", "") or shot.get("filename", "")
+        try:
+            img_path = _clean_path(raw_path).resolve(strict=False)
+        except Exception:
+            img_path = base_dir / shot.get("filename", "")
+        if not img_path.exists():
+            fallback = base_dir / shot.get("filename", "")
+            if fallback.exists():
+                img_path = fallback
+        image_paths.append(str(img_path))
 
-    # --- ВАЖНО! --- Исправляем типы ключей у positions (преобразуем в int)
-    for loc in locators:
-        if "name" not in loc or "positions" not in loc:
-            raise ValueError(f"Bad locator entry: {loc}")
-        # Привести ключи positions к int, значения оставить как есть
-        if isinstance(loc["positions"], dict):
-            loc["positions"] = {
-                int(k): v for k, v in loc["positions"].items()
+    for shot_idx, shot in enumerate(data.get("shots", [])):
+        for m in shot.get("markers", []):
+            lid = m["locator_id"]
+            if lid not in locators_map:
+                name = next((l["name"] for l in data.get("locators", []) if l["id"] == lid), f"loc{lid}")
+                locators_map[lid] = {"name": name, "positions": {}}
+            locators_map[lid]["positions"][shot_idx] = {
+                "x": m["x"],
+                "y": m["y"]
             }
 
     return {
         "images": image_paths,
-        "locators": locators,
+        "locators": list(locators_map.values()),
     }
+
+
 
 
 def verify_paths(paths: List[str]) -> List[str]:

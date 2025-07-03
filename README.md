@@ -12,6 +12,7 @@ This repository contains a prototype image-based camera calibration and export t
   locator marks to estimate camera poses and 3D points.
 - `AMUtilities.py` - Helper utilities for loading images and saving scenes.
 - `AMUI.ui` - Qt Designer UI file.
+- `cpp/Filesystem.cpp` - Minimal C++ implementation of the `.ams` archive format.
 
 ## Usage
 
@@ -19,7 +20,13 @@ This repository contains a prototype image-based camera calibration and export t
    ```bash
    pip install PySide2 opencv-python
    ```
-2. Run `AMmain.py` inside 3ds Max's Python environment or as a standalone app for testing.
+2. Build the C++ modules using CMake (requires a compiler and `pybind11` headers):
+   ```bash
+   mkdir build && cd build
+   cmake .. && cmake --build .
+   ```
+   This produces `CameraCalibrator_cpp` and `Filesystem` Python extensions.
+3. Run `AMmain.py` inside 3ds Max's Python environment or as a standalone app for testing.
 
 ## Status
 

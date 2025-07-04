@@ -5,14 +5,19 @@
 """
 import sys
 import os
+import json
 from pathlib import Path
 
 try:
     from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
     QShortcutBase = QtWidgets.QShortcut
+    from PySide2.QtCore import QSettings
+    from PySide2.QtWidgets import QAction
 except ImportError:
     from PySide6 import QtWidgets, QtCore, QtGui, QtUiTools
     QShortcutBase = QtGui.QShortcut
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QAction
 
 QFileDialog = QtWidgets.QFileDialog
 QMessageBox = QtWidgets.QMessageBox
@@ -28,11 +33,27 @@ sys.path.insert(0, BASE_DIR)
 import AMUtilities
 importlib.reload(AMUtilities)
 
+SETTINGS_FILE = Path(__file__).parent / "settings.json"
 
 import CameraCalibrator
 importlib.reload(CameraCalibrator)
 from CameraCalibrator import CameraCalibrator
 
+def load_settings() -> dict:
+    if SETTINGS_FILE.exists():
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+def save_settings(data: dict) -> None:
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+settings_data = load_settings()
+MAX_RECENT_PROJECTS = 5
 
 # Держим ссылку глобально, чтобы окно не закрывалось сразу
 main_window = None
@@ -327,10 +348,12 @@ def on_locator_added(x_norm: float, y_norm: float):
 def update_window_title():
     base_name = "AutoModeler"
     if scene_file_path:
-        name = Path(scene_file_path).name
+        name = Path(scene_file_path).stem  # без .ams
     else:
         name = "Untitled"
     main_window.setWindowTitle(f"{name} - {base_name}")
+
+
 
 
 def new_scene():
@@ -389,7 +412,12 @@ def save_scene_as():
     )
     if not path:
         return
-    scene_file_path = path  # ← обновляем "текущую сцену"
+
+    # Гарантируем .ams
+    if not path.lower().endswith(".ams"):
+        path += ".ams"
+
+    scene_file_path = path
     update_window_title()
     save_scene()
 
@@ -411,15 +439,101 @@ def load_scene():
         main_window.selected_locator = None
         main_window.image_errors = {}
 
-        scene_file_path = path
-        update_window_title()
+        # Обнуляем путь, если .rzi — мы не сохраняем rzi, только .ams
+        if Path(path).suffix.lower() == ".ams":
+            scene_file_path = path
+        else:
+            scene_file_path = None  # → Save вызовет Save As и сохранит как .ams
 
+        update_window_title()
         update_tree()
         if main_window.images:
             show_image(0)
         else:
             main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
             main_window.viewer.set_markers([])
+    
+        add_to_recent(path)
+
+
+    except Exception as e:
+        import traceback
+        QtWidgets.QMessageBox.critical(
+            main_window, "Load Failed", f"{e}\n{traceback.format_exc()}"
+        )
+        
+def add_to_recent(path: str):
+    if not path.lower().endswith(".ams"):
+        return
+
+    path = str(path).strip()
+    if not path:
+        return
+
+    recent = settings_data.get("recent_projects", [])
+    if path in recent:
+        recent.remove(path)
+    recent.insert(0, path)
+    recent = recent[:MAX_RECENT_PROJECTS]
+    settings_data["recent_projects"] = recent
+    save_settings(settings_data)
+    update_recent_projects_menu()
+
+
+def make_recent_action(path: str) -> QtWidgets.QAction:
+    action = QtWidgets.QAction(str(path), main_window)
+    action.triggered.connect(lambda checked=False, p=path: open_recent_project(p))
+    return action
+
+
+
+def update_recent_projects_menu():
+    menu = main_window.menuRecent_Projects
+    menu.clear()
+
+    recent_paths = settings_data.get("recent_projects", [])
+    valid_paths = []
+
+    for p in recent_paths:
+        try:
+            p_str = str(p).strip()
+            if p_str and Path(p_str).is_file():
+                valid_paths.append(p_str)
+        except Exception:
+            continue
+
+    for path in valid_paths:
+        action = QtWidgets.QAction(path, main_window)
+        action.triggered.connect(lambda checked=False, p=path: open_recent_project(p))
+        menu.addAction(action)
+
+
+
+def open_recent_project(path: str):
+    if not Path(path).is_file():
+        QtWidgets.QMessageBox.warning(main_window, "File Not Found", f"File not found:\n{path}")
+        return
+
+    try:
+        data = AMUtilities.load_scene_any(path)
+        main_window.image_paths = data.get("image_paths", [])
+        main_window.locators = data.get("locators", [])
+        main_window.images = AMUtilities.load_images(main_window.image_paths)
+        main_window.selected_locator = None
+        main_window.image_errors = {}
+
+        global scene_file_path
+        scene_file_path = path
+        update_window_title()
+        update_tree()
+        if main_window.images:
+            show_image(0)
+        else:
+            main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
+            main_window.viewer.set_markers([])
+
+        add_to_recent(path)
+
 
     except Exception as e:
         import traceback
@@ -429,12 +543,6 @@ def load_scene():
 
 
 
-
-
-def open_recent_project(action):
-    project_name = action.text()
-    QtWidgets.QMessageBox.information(main_window, "Recent Project", f"Clicked on: {project_name}")
-    # Здесь можешь вставить логику загрузки проекта по имени или пути
 
 
 def preferences():
@@ -642,17 +750,13 @@ try:
         main_window.actionSave.triggered.connect(save_scene)
         main_window.actionSave_As.triggered.connect(save_scene_as)
         main_window.actionLoad.triggered.connect(import_images)
-        # Подключаем каждую QAction из меню "Recent Projects"
-        for action in main_window.menuRecent_Projects.actions():
-            action.triggered.connect(lambda _, a=action: open_recent_project(a))
-
         main_window.actionPreferences.triggered.connect(preferences)
         main_window.actionUndo.triggered.connect(undo)
         main_window.actionRedo.triggered.connect(redo)
-
         main_window.setWindowTitle("AutoModeler")
         main_window.resize(1200, 900)
         main_window.show()
+        update_recent_projects_menu()
 
 except Exception as e:
     import traceback

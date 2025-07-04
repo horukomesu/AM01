@@ -10,7 +10,6 @@ tested in isolation.
 from __future__ import annotations
 import sys
 import os
-import json
 from pathlib import Path
 from typing import List, Dict, Any
 import importlib
@@ -21,9 +20,8 @@ BASE_DIR = os.path.dirname(__file__)
 sys.path.insert(0, BASE_DIR)
 
 # Добавить рядом с другими импортами
-import AMRZI_IO
-importlib.reload(AMRZI_IO)
-from AMRZI_IO import read_rzi, write_rzi
+import Filesystem
+importlib.reload(Filesystem)
 
 from CameraCalibrator import CameraCalibrator
 
@@ -62,120 +60,43 @@ def load_images(paths: List[str]) -> List[QtGui.QImage]:
             images.append(qimg)
     return images
 
-def save_scene(
-    image_paths: List[str],
-    locators: List[Dict[str, Any]],
-    path: str
-) -> None:
-    """Сохраняет текущую сцену в .rzi (RZML-файл, совместимый с ImageModeler)."""
-    # Загружаем изображения, чтобы узнать разрешения
-    images = load_images(image_paths)
-    if not images:
-        raise RuntimeError("Нет доступных изображений для сохранения сцены.")
-
-    width = images[0].width()
-    height = images[0].height()
-
-    # Примерный FOV по горизонтали — позже можно улучшить через CameraCalibrator
-    default_fovx = 60.0
-
-    rzi_data = {
-        "version": "1.4.3",
-        "path": str(Path(path).resolve()),
-        "locators": [],
-        "cameras": [{
-            "id": 1,
-            "name": "Camera Device",
-            "width": width,
-            "height": height,
-            "sensor_width": 42.6667,  # по умолчанию (можно сделать опцией)
-            "fovx": default_fovx,
-            "distortion_type": "disto3i",
-        }],
-        "shots": []
+def save_scene(image_paths: List[str], locators: List[Dict[str, Any]], path: str) -> None:
+    import json
+    data = {
+        "format_version": FORMAT_VERSION,
+        "images": image_paths,  # просто список имен, порядок важен
+        "locators": locators,   # positions должны ссылаться по индексу
     }
-
-    for idx, img_path in enumerate(image_paths):
-        if idx >= len(images):  # safety
-            continue
-
-        shot = {
-            "id": idx + 1,
-            "filename": Path(img_path).name,
-            "camera_id": 1,
-            "width": images[idx].width(),
-            "height": images[idx].height(),
-            "fovx": default_fovx,
-            "rotation": {"x": -180},
-            "image_path": str(Path(img_path).resolve()),
-            "markers": []
-        }
-
-        for loc_idx, loc in enumerate(locators):
-            if "positions" in loc and idx in loc["positions"]:
-                pos = loc["positions"][idx]
-                shot["markers"].append({
-                    "locator_id": loc_idx + 1,
-                    "x": float(pos["x"]),
-                    "y": float(pos["y"]),
-                })
-
-        rzi_data["shots"].append(shot)
-
-    for loc_idx, loc in enumerate(locators):
-        rzi_data["locators"].append({
-            "id": loc_idx + 1,
-            "name": loc.get("name", f"loc{loc_idx+1}"),
-        })
-
-    write_rzi(path, rzi_data)
+    json_str = json.dumps(data, indent=2, ensure_ascii=False)
+    Filesystem.save_ams(path, json_str, image_paths)
 
 
-
-def _clean_path(p: str) -> Path:
-    # Убираем начальные двойные слэши, заменяем на правильный путь
-    p = p.lstrip("/\\")  # удаляет начальные \ или /
-    return Path(p).expanduser()
 
 
 
 def load_scene(path: str) -> Dict[str, Any]:
-    if not Path(path).is_file():
-        raise FileNotFoundError(f"Scene file not found: {path}")
+    import json
+    raw = Filesystem.load_ams(path)
+    data = json.loads(raw["scene"])
+
+    # --- Проверка и приведение к корректной структуре ---
+    if "images" not in data or "locators" not in data:
+        raise ValueError("Scene missing 'images' or 'locators'")
     
-    data = read_rzi(path)
-    base_dir = Path(path).parent
+    image_paths = list(data["images"])
+    locators = list(data["locators"])
 
-    image_paths = []
-    locators_map = {}
-
-    for shot in data.get("shots", []):
-        raw_path = shot.get("image_path", "") or shot.get("filename", "")
-        try:
-            img_path = _clean_path(raw_path).resolve(strict=False)
-        except Exception:
-            img_path = base_dir / shot.get("filename", "")
-        if not img_path.exists():
-            fallback = base_dir / shot.get("filename", "")
-            if fallback.exists():
-                img_path = fallback
-        image_paths.append(str(img_path))
-
-    for shot_idx, shot in enumerate(data.get("shots", [])):
-        for m in shot.get("markers", []):
-            lid = m["locator_id"]
-            if lid not in locators_map:
-                name = next((l["name"] for l in data.get("locators", []) if l["id"] == lid), f"loc{lid}")
-                locators_map[lid] = {"name": name, "positions": {}}
-            locators_map[lid]["positions"][shot_idx] = {
-                "x": m["x"],
-                "y": m["y"]
-            }
+    for loc in locators:
+        if "name" not in loc or "positions" not in loc:
+            raise ValueError(f"Bad locator format: {loc}")
+        if isinstance(loc["positions"], dict):
+            loc["positions"] = {int(k): v for k, v in loc["positions"].items()}
 
     return {
-        "images": image_paths,
-        "locators": list(locators_map.values()),
+        "image_paths": image_paths,
+        "locators": locators,
     }
+
 
 
 

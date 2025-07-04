@@ -14,7 +14,8 @@ except ImportError:
     from PySide6 import QtWidgets, QtCore, QtGui, QtUiTools
     QShortcutBase = QtGui.QShortcut
 
-
+QFileDialog = QtWidgets.QFileDialog
+QMessageBox = QtWidgets.QMessageBox
 
 import numpy as np
 import importlib
@@ -354,39 +355,51 @@ def import_images():
 
 def save_scene():
     path, _ = QtWidgets.QFileDialog.getSaveFileName(
-        main_window, "Save Scene", "", "ImageModeler Scene (*.rzi)"
+        main_window, "Save Scene", "", "AMS Scene (*.ams)"
     )
     if not path:
         return
-    AMUtilities.save_scene(
-        main_window.image_paths,
-        main_window.locators,
-        path
-    )
+    try:
+        AMUtilities.save_scene(
+            path=path,
+            image_paths=main_window.image_paths,
+            locators=main_window.locators
+        )
+        QtWidgets.QMessageBox.information(main_window, "Save", "Scene saved successfully.")
+    except Exception as e:
+        QtWidgets.QMessageBox.critical(main_window, "Save Failed", str(e))
 
 
 def save_scene_as():
-    save_scene()
+    save_scene()  # Можно позже расширить логикой if нужно сохранить в другое место
+
 
 def load_scene():
-    exit_locator_mode()
     path, _ = QtWidgets.QFileDialog.getOpenFileName(
-        main_window, "Load Scene", "", "ImageModeler Scene (*.rzi)"
+        main_window, "Load Scene", "", "AMS Scene (*.ams)"
     )
     if not path:
         return
-    scene = AMUtilities.load_scene(path)
-    main_window.image_paths = scene["images"]
-    main_window.images = AMUtilities.load_images(main_window.image_paths)
-    main_window.locators = scene["locators"]
-    main_window.selected_locator = None
-    main_window.image_errors = {}
-    update_tree()
-    if main_window.images:
-        show_image(0)
-    else:
-        main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
-        main_window.viewer.set_markers([])
+    try:
+        data = AMUtilities.load_scene(path)
+        main_window.image_paths = data.get("image_paths", [])
+        main_window.locators = data.get("locators", [])
+        main_window.images = AMUtilities.load_images(main_window.image_paths)
+        main_window.selected_locator = None
+        main_window.image_errors = {}
+        update_tree()
+        if main_window.images:
+            show_image(0)
+        else:
+            main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
+            main_window.viewer.set_markers([])
+        QtWidgets.QMessageBox.information(main_window, "Load", "Scene loaded successfully.")
+    except Exception as e:
+        import traceback
+        QtWidgets.QMessageBox.critical(
+            main_window, "Load Failed", f"{e}\n{traceback.format_exc()}"
+        )
+
 
 
 def open_recent_project(action):

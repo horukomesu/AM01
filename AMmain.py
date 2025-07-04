@@ -8,19 +8,16 @@ import os
 import json
 from pathlib import Path
 
-try:
-    from PySide2 import QtWidgets, QtCore, QtGui, QtUiTools
-    QShortcutBase = QtWidgets.QShortcut
-    from PySide2.QtCore import QSettings
-    from PySide2.QtWidgets import QAction
-except ImportError:
-    from PySide6 import QtWidgets, QtCore, QtGui, QtUiTools
-    QShortcutBase = QtGui.QShortcut
-    from PySide6.QtCore import QSettings
-    from PySide6.QtWidgets import QAction
+from PyQt6 import QtWidgets, QtGui, uic, QtCore
+
+from PyQt6.QtGui import QPainter, QPixmap, QImage, QColor, QPen, QIcon, QAction, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, pyqtSignal, QFile, QPointF, QPoint, QEvent, QObject
+from PyQt6.QtWidgets import QGraphicsItem
+
 
 QFileDialog = QtWidgets.QFileDialog
 QMessageBox = QtWidgets.QMessageBox
+
 
 import numpy as np
 import importlib
@@ -41,7 +38,7 @@ from CameraCalibrator import CameraCalibrator
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        with open(SETTINGS_FILE, "r", encoding="utf-8 ") as f:
             try:
                 return json.load(f)
             except json.JSONDecodeError:
@@ -54,16 +51,14 @@ def save_settings(data: dict) -> None:
 
 settings_data = load_settings()
 MAX_RECENT_PROJECTS = 5
-
-# Держим ссылку глобально, чтобы окно не закрывалось сразу
-main_window = None
 scene_file_path = None
 
 class ImageViewer(QtWidgets.QGraphicsView):
     """Interactive viewer placed inside ``MainFrame``."""
 
-    locator_added = QtCore.Signal(float, float)
-    navigate = QtCore.Signal(int)  # emit +1/-1 to switch images
+    locator_added = pyqtSignal(float, float)
+
+    navigate = pyqtSignal(int)  # emit +1/-1 to switch images
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -73,19 +68,20 @@ class ImageViewer(QtWidgets.QGraphicsView):
         self.mark_items = []
 
         self.setRenderHints(
-            QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform
-        )
-        self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
+)
+        self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
 
-        self.setTransformationAnchor(QtWidgets.QGraphicsView.NoAnchor)
-        self.setResizeAnchor(QtWidgets.QGraphicsView.NoAnchor)
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.NoAnchor)
 
         self._panning = False
         self._pan_start = QtCore.QPoint()
         self.adding_locator = False
         self.zoom_step = 1.2
 
-        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
         self.customContextMenuRequested.connect(self._show_action_menu)
 
         self._action_menu = None
@@ -104,7 +100,7 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self.verticalScrollBar().setValue(v_val)
         else:
             self.resetTransform()
-            self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
+            self.fitInView(self.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_markers(self, markers, highlight_name=None):
         for item in self.mark_items:
@@ -130,26 +126,27 @@ class ImageViewer(QtWidgets.QGraphicsView):
         for line in (line1, line2):
             line.setPen(pen)
             line.setPos(pos)
-            line.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+            line.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+
             self.scene().addItem(line)
             self.mark_items.append(line)
 
         text = QtWidgets.QGraphicsSimpleTextItem(name)
-        text.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        text.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
         text.setPos(pos + QtCore.QPointF(6, -6))
         self.scene().addItem(text)
         self.mark_items.append(text)
 
     def mousePressEvent(self, event):
         if self.adding_locator:
-            if event.button() == QtCore.Qt.LeftButton:
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
                 pos = self.mapToScene(event.pos())
                 x_norm = pos.x() / self.sceneRect().width()
                 y_norm = pos.y() / self.sceneRect().height()
                 self.locator_added.emit(x_norm, y_norm)
                 return
 
-        if event.button() == QtCore.Qt.MiddleButton:
+        if event.button() == QtCore.Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_start = event.pos()
             self.setCursor(QtCore.Qt.ClosedHandCursor)
@@ -170,29 +167,29 @@ class ImageViewer(QtWidgets.QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.MiddleButton and self._panning:
+        if event.button() == QtCore.Qt.MouseButton.MiddleButton and self._panning:
             self._panning = False
-            self.setCursor(QtCore.Qt.ArrowCursor)
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         else:
             super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event):
-        if event.modifiers() & QtCore.Qt.ControlModifier:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             step = 1 if event.angleDelta().y() > 0 else -1
             self.navigate.emit(step)
             return
 
-        old_pos = self.mapToScene(event.pos())
+        old_pos = self.mapToScene(event.position().toPoint())
         zoom_out = event.angleDelta().y() < 0
         factor = 1.0 / self.zoom_step if zoom_out else self.zoom_step
         self.scale(factor, factor)
-        new_pos = self.mapToScene(event.pos())
+        new_pos = self.mapToScene(event.position().toPoint())
         delta = new_pos - old_pos
         self.translate(delta.x(), delta.y())
 
     def mouseDoubleClickEvent(self, event):
         if self._pixmap.pixmap() and not self._pixmap.pixmap().isNull():
-            self.fitInView(self.sceneRect(), QtCore.Qt.KeepAspectRatio)
+            self.fitInView(self.sceneRect(), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
         super().mouseDoubleClickEvent(event)
 
     def _show_action_menu(self, pos):
@@ -207,7 +204,8 @@ class ImageViewer(QtWidgets.QGraphicsView):
             self._action_menu.addAction(
                 "Add Modeling Locator", add_modeling_locator
             )
-        self._action_menu.exec_(self.mapToGlobal(pos))
+        self._action_menu.exec(self.mapToGlobal(pos))
+
 
 
 def get_image_markers(index: int):
@@ -231,11 +229,11 @@ def update_tree():
     tree.clear()
 
     img_root = QtWidgets.QTreeWidgetItem(tree, ["Images"])
-    img_root.setData(0, QtCore.Qt.UserRole, ("images_root",))
+    img_root.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("images_root",))
     img_errors = getattr(main_window, "image_errors", {})
     for idx, path in enumerate(main_window.image_paths):
         item = QtWidgets.QTreeWidgetItem(img_root, [Path(path).name])
-        item.setData(0, QtCore.Qt.UserRole, ("image", idx))
+        item.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("image", idx))
         err = img_errors.get(idx)
         if err is not None:
             color = AMUtilities.error_to_color(err)
@@ -244,10 +242,10 @@ def update_tree():
             item.setIcon(0, QtGui.QIcon(icon))
 
     loc_root = QtWidgets.QTreeWidgetItem(tree, ["Locators"])
-    loc_root.setData(0, QtCore.Qt.UserRole, ("loc_root",))
+    loc_root.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("loc_root",))
     for loc in getattr(main_window, "locators", []):
         item = QtWidgets.QTreeWidgetItem(loc_root, [loc["name"]])
-        item.setData(0, QtCore.Qt.UserRole, ("locator", loc["name"]))
+        item.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("locator", loc["name"]))
         color = AMUtilities.error_to_color(loc.get("error", 0.0))
         icon = QtGui.QPixmap(16, 16)
         icon.fill(color)
@@ -270,7 +268,7 @@ def exit_locator_mode():
     """Reset locator placement mode."""
     main_window.locator_mode = False
     main_window.viewer.adding_locator = False
-    main_window.viewer.setCursor(QtCore.Qt.ArrowCursor)
+    main_window.viewer.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
 
 
 def show_image(index: int, keep_view: bool = False):
@@ -300,7 +298,7 @@ def prev_image():
 def on_tree_selection_changed(current, _previous):
     if not current:
         return
-    data = current.data(0, QtCore.Qt.UserRole)
+    data = current.data(0, QtCore.Qt.ItemDataRole.UserRole)
     if not data:
         return
     if data[0] == "image":
@@ -311,7 +309,7 @@ def on_tree_selection_changed(current, _previous):
         exit_locator_mode()
         main_window.selected_locator = data[1]
         main_window.viewer.adding_locator = True
-        main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
+        main_window.viewer.setCursor(QtCore.Qt.CursorShape.CrossCursor)
         main_window.locator_mode = True
         show_image(getattr(main_window, "current_image_index", 0), keep_view=True)
 
@@ -320,7 +318,7 @@ def delete_selected_locator():
     item = main_window.MainTree.currentItem()
     if not item:
         return
-    data = item.data(0, QtCore.Qt.UserRole)
+    data = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
     if not data or data[0] != "locator":
         return
     name = data[1]
@@ -427,7 +425,10 @@ def save_scene_as():
 def load_scene():
     global scene_file_path
     path, _ = QtWidgets.QFileDialog.getOpenFileName(
-        main_window, "Load Scene", "", "AMS or RZI Scene (*.ams *.rzi)"
+        parent=main_window,
+        caption="Load Scene",
+        directory="",
+        filter="AMS or RZI Scene (*.ams *.rzi)"
     )
     if not path:
         return
@@ -480,10 +481,11 @@ def add_to_recent(path: str):
     update_recent_projects_menu()
 
 
-def make_recent_action(path: str) -> QtWidgets.QAction:
-    action = QtWidgets.QAction(str(path), main_window)
+def make_recent_action(path: str) -> QAction:
+    action = QAction(str(path), main_window)
     action.triggered.connect(lambda checked=False, p=path: open_recent_project(p))
     return action
+
 
 
 
@@ -503,7 +505,7 @@ def update_recent_projects_menu():
             continue
 
     for path in valid_paths:
-        action = QtWidgets.QAction(path, main_window)
+        action = QAction(path, main_window)
         action.triggered.connect(lambda checked=False, p=path: open_recent_project(p))
         menu.addAction(action)
 
@@ -566,9 +568,9 @@ def add_locator():
     main_window.selected_locator = name
     main_window.viewer.adding_locator = True
     main_window.locator_mode = True
-    main_window.viewer.setCursor(QtCore.Qt.CrossCursor)
+    main_window.viewer.setCursor(QtCore.Qt.CursorShape.CrossCursor)
     # select item in tree
-    items = main_window.MainTree.findItems(name, QtCore.Qt.MatchRecursive)
+    items = main_window.MainTree.findItems(name, QtCore.Qt.MatchFlag.MatchRecursive)
     if items:
         main_window.MainTree.setCurrentItem(items[0])
 
@@ -635,38 +637,6 @@ def calibrate():
 
 
 
-
-
-def move_to_scene():
-    if not hasattr(main_window, "calibration") or main_window.calibration is None:
-        QtWidgets.QMessageBox.warning(
-            main_window, "Move to Scene", "No calibration result found. Run calibration first."
-        )
-        return
-    if not getattr(main_window, "image_paths", []):
-        QtWidgets.QMessageBox.warning(
-            main_window, "Move to Scene", "No images loaded."
-        )
-        return
-    try:
-        AMUtilities.export_calibration_to_max(
-            calibrator=main_window.calibration,
-            image_paths=main_window.image_paths,
-            locator_names=[f"pt{i}" for i in range(len(main_window.calibration.get_points_3d()))],
-        )
-        QtWidgets.QMessageBox.information(
-            main_window, "Move to Scene", "Exported cameras and locators to 3ds Max scene."
-        )
-    except Exception as exc:
-        import traceback
-        QtWidgets.QMessageBox.critical(
-            main_window, "Move to Scene",
-            f"Export failed:\n{exc}\n{traceback.format_exc()}"
-        )
-
-
-
-
 def define_worldspace():
     QtWidgets.QMessageBox.information(main_window, "Worldspace", "Define worldspace not implemented.")
 
@@ -676,88 +646,72 @@ def define_reference_distance():
 def add_modeling_locator():
     QtWidgets.QMessageBox.information(main_window, "Modeling Locator", "Add modeling locator not implemented.")
 
-# -- Автозапуск окна при загрузке скрипта --
-try:
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        raise RuntimeError("QApplication не найден. Скрипт должен запускаться внутри 3ds Max!")
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    main_window = uic.loadUi("AMUI.ui")
 
-    if main_window is None:
-        ui_path = Path(__file__).with_name("AMUI.ui")
-        loader = QtUiTools.QUiLoader()
-        ui_file = QtCore.QFile(str(ui_path))
-        ui_file.open(QtCore.QFile.ReadOnly)
-        main_window = loader.load(ui_file, None)
-        ui_file.close()
+    # Поле инициализации
+    main_window.image_paths = []
+    main_window.images = []
+    main_window.locators = []
+    main_window.selected_locator = None
+    main_window.locator_mode = False
+    main_window.image_errors = {}
 
-        # Инициализация служебных полей для сцены и изображений
-        main_window.image_paths = []
-        main_window.images = []
-        main_window.locators = []
-        main_window.selected_locator = None
-        main_window.locator_mode = False
-        main_window.image_errors = {}
+    # Viewer init
+    layout = QtWidgets.QVBoxLayout(main_window.MainFrame)
+    layout.setContentsMargins(0, 0, 0, 0)
+    main_window.viewer = ImageViewer(main_window.MainFrame)
+    main_window.viewer.locator_added.connect(on_locator_added)
+    main_window.viewer.navigate.connect(lambda step: (next_image() if step > 0 else prev_image()))
+    layout.addWidget(main_window.viewer)
 
-        # Viewer setup inside MainFrame
-        layout = QtWidgets.QVBoxLayout(main_window.MainFrame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        main_window.viewer = ImageViewer(main_window.MainFrame)
-        main_window.viewer.locator_added.connect(on_locator_added)
-        main_window.viewer.navigate.connect(
-            lambda step: (next_image() if step > 0 else prev_image())
-        )
-        layout.addWidget(main_window.viewer)
+    # Tree events
+    main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)
 
-        # Tree selection and delete key
-        main_window.MainTree.currentItemChanged.connect(on_tree_selection_changed)
+    class _DeleteFilter(QtCore.QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Delete:
+                delete_selected_locator()
+                return True
+            return super().eventFilter(obj, event)
 
-        class _DeleteFilter(QtCore.QObject):
-            def eventFilter(self, obj, event):
-                if event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Delete:
-                    delete_selected_locator()
-                    return True
-                return super().eventFilter(obj, event)
+    main_window._del_filter = _DeleteFilter(main_window.MainTree)
+    main_window.MainTree.installEventFilter(main_window._del_filter)
 
-        main_window._del_filter = _DeleteFilter(main_window.MainTree)
-        main_window.MainTree.installEventFilter(main_window._del_filter)
+    class _EscFilter(QtCore.QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Escape:
+                exit_locator_mode()
+                return True
+            return super().eventFilter(obj, event)
 
-        class _EscFilter(QtCore.QObject):
-            def eventFilter(self, obj, event):
-                if event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Escape:
-                    exit_locator_mode()
-                    return True
-                return super().eventFilter(obj, event)
+    main_window._esc_filter = _EscFilter(main_window.viewer)
+    main_window.viewer.installEventFilter(main_window._esc_filter)
 
-        main_window._esc_filter = _EscFilter(main_window.viewer)
-        main_window.viewer.installEventFilter(main_window._esc_filter)
+    QShortcut(QKeySequence(Qt.Key.Key_Right), main_window).activated.connect(next_image)
+    QShortcut(QKeySequence(Qt.Key.Key_Left), main_window).activated.connect(prev_image)
 
-        QShortcutBase(QtGui.QKeySequence(QtCore.Qt.Key_Right), main_window).activated.connect(next_image)
-        QShortcutBase(QtGui.QKeySequence(QtCore.Qt.Key_Left), main_window).activated.connect(prev_image)
+    # Menu / Buttons
+    main_window.btnAddLoc.clicked.connect(add_locator)
+    main_window.btnCalibrate.clicked.connect(calibrate)
+    main_window.btnDFWS.clicked.connect(define_worldspace)
+    main_window.btnDFMM.clicked.connect(define_reference_distance)
+    main_window.btnLocMod.clicked.connect(add_modeling_locator)
 
+    main_window.actionNEW.triggered.connect(new_scene)
+    main_window.actionOpen.triggered.connect(load_scene)
+    main_window.actionSave.triggered.connect(save_scene)
+    main_window.actionSave_As.triggered.connect(save_scene_as)
+    main_window.actionLoad.triggered.connect(import_images)
+    main_window.actionPreferences.triggered.connect(preferences)
+    main_window.actionUndo.triggered.connect(undo)
+    main_window.actionRedo.triggered.connect(redo)
 
+    main_window.setWindowTitle("AutoModeler")
+    main_window.resize(1200, 900)
+    main_window.show()
+    update_recent_projects_menu()
 
-        # Toolbar buttons
-        main_window.btnAddLoc.clicked.connect(add_locator)
-        main_window.btnCalibrate.clicked.connect(calibrate)
-        main_window.btnDFWS.clicked.connect(define_worldspace)
-        main_window.btnDFMM.clicked.connect(define_reference_distance)
-        main_window.btnLocMod.clicked.connect(add_modeling_locator)
-        main_window.btnMoveToScene.clicked.connect(move_to_scene)
+    sys.exit(app.exec())
 
-        # Menu actions
-        main_window.actionNEW.triggered.connect(new_scene)
-        main_window.actionOpen.triggered.connect(load_scene)
-        main_window.actionSave.triggered.connect(save_scene)
-        main_window.actionSave_As.triggered.connect(save_scene_as)
-        main_window.actionLoad.triggered.connect(import_images)
-        main_window.actionPreferences.triggered.connect(preferences)
-        main_window.actionUndo.triggered.connect(undo)
-        main_window.actionRedo.triggered.connect(redo)
-        main_window.setWindowTitle("AutoModeler")
-        main_window.resize(1200, 900)
-        main_window.show()
-        update_recent_projects_menu()
-
-except Exception as e:
-    import traceback
-    QtWidgets.QMessageBox.critical(None, "AutoModeler Error", f"Ошибка запуска:\n{traceback.format_exc()}")

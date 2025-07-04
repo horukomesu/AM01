@@ -278,7 +278,7 @@ class CameraCalibrator:
                     "K": [[f, 0, cx], [0, f, cy], [0, 0, 1]]
                 }
 
-            pose = image.cam_from_world
+            pose = image.cam_from_world()
             R_w2c = pose.rotation.matrix()
             t_w2c = pose.translation
             R_c2w = R_w2c.T

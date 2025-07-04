@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch AutoModeler",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/test_launcher.py",
+      "console": "integratedTerminal"
+    }
+  ]
+}

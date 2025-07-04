@@ -10,6 +10,7 @@ tested in isolation.
 from __future__ import annotations
 import sys
 import os
+from AMRZI_IO import read_rzi
 from pathlib import Path
 from typing import List, Dict, Any
 import importlib
@@ -71,18 +72,36 @@ def save_scene(image_paths: List[str], locators: List[Dict[str, Any]], path: str
     Filesystem.save_ams(path, json_str, image_paths)
 
 
+def load_scene_any(path: str) -> Dict[str, Any]:
+    """
+    Универсальная загрузка сцены (.ams или .rzi).
+
+    Parameters
+    ----------
+    path : str
+        Путь к сцене (расширение определяет тип).
+
+    Returns
+    -------
+    Dict[str, Any] с ключами: "image_paths", "locators"
+    """
+    ext = Path(path).suffix.lower()
+    if ext == ".rzi":
+        return load_scene_rzi(path)
+    elif ext == ".ams":
+        return load_scene_ams(path)
+    else:
+        raise ValueError(f"Unsupported scene format: {ext}")
 
 
-
-def load_scene(path: str) -> Dict[str, Any]:
+def load_scene_ams(path: str) -> Dict[str, Any]:
     import json
     raw = Filesystem.load_ams(path)
     data = json.loads(raw["scene"])
 
-    # --- Проверка и приведение к корректной структуре ---
     if "images" not in data or "locators" not in data:
         raise ValueError("Scene missing 'images' or 'locators'")
-    
+
     image_paths = list(data["images"])
     locators = list(data["locators"])
 
@@ -99,6 +118,43 @@ def load_scene(path: str) -> Dict[str, Any]:
 
 
 
+def load_scene_rzi(path: str) -> Dict[str, Any]:
+    if not Path(path).is_file():
+        raise FileNotFoundError(f"Scene file not found: {path}")
+    
+    data = read_rzi(path)
+    base_dir = Path(path).parent
+
+    image_paths = []
+    locators_map = {}
+
+    for shot in data.get("shots", []):
+        raw_path = shot.get("image_path", "") or shot.get("filename", "")
+        try:
+            img_path = Path(raw_path).expanduser().resolve(strict=False)
+        except Exception:
+            img_path = base_dir / shot.get("filename", "")
+        if not img_path.exists():
+            fallback = base_dir / shot.get("filename", "")
+            if fallback.exists():
+                img_path = fallback
+        image_paths.append(str(img_path))
+
+    for shot_idx, shot in enumerate(data.get("shots", [])):
+        for m in shot.get("markers", []):
+            lid = m["locator_id"]
+            if lid not in locators_map:
+                name = next((l["name"] for l in data.get("locators", []) if l["id"] == lid), f"loc{lid}")
+                locators_map[lid] = {"name": name, "positions": {}}
+            locators_map[lid]["positions"][shot_idx] = {
+                "x": m["x"],
+                "y": m["y"]
+            }
+
+    return {
+        "image_paths": image_paths,
+        "locators": list(locators_map.values()),
+    }
 
 
 def verify_paths(paths: List[str]) -> List[str]:

@@ -36,7 +36,7 @@ from CameraCalibrator import CameraCalibrator
 
 # Держим ссылку глобально, чтобы окно не закрывалось сразу
 main_window = None
-
+scene_file_path = None
 
 class ImageViewer(QtWidgets.QGraphicsView):
     """Interactive viewer placed inside ``MainFrame``."""
@@ -323,17 +323,29 @@ def on_locator_added(x_norm: float, y_norm: float):
     loc.setdefault("positions", {})[idx] = {"x": x_norm, "y": y_norm}
     update_tree()
     show_image(idx, keep_view=True)
+
+def update_window_title():
+    base_name = "AutoModeler"
+    if scene_file_path:
+        name = Path(scene_file_path).name
+    else:
+        name = "Untitled"
+    main_window.setWindowTitle(f"{name} - {base_name}")
+
+
 def new_scene():
+    global scene_file_path
     exit_locator_mode()
     main_window.image_paths = []
     main_window.images = []
     main_window.locators = []
     main_window.selected_locator = None
     main_window.image_errors = {}
+    scene_file_path = None  # ← сброс пути
+    update_window_title()
     update_tree()
     main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
     main_window.viewer.set_markers([])
-    QtWidgets.QMessageBox.information(main_window, "New", "Started a new scene.")
 
 def import_images():
     exit_locator_mode()
@@ -354,51 +366,68 @@ def import_images():
         main_window.viewer.set_markers([])
 
 def save_scene():
-    path, _ = QtWidgets.QFileDialog.getSaveFileName(
-        main_window, "Save Scene", "", "AMS Scene (*.ams)"
-    )
-    if not path:
+    global scene_file_path
+    if not scene_file_path:
+        save_scene_as()
         return
     try:
         AMUtilities.save_scene(
-            path=path,
+            path=scene_file_path,
             image_paths=main_window.image_paths,
             locators=main_window.locators
         )
-        QtWidgets.QMessageBox.information(main_window, "Save", "Scene saved successfully.")
     except Exception as e:
         QtWidgets.QMessageBox.critical(main_window, "Save Failed", str(e))
 
 
+
+
 def save_scene_as():
-    save_scene()  # Можно позже расширить логикой if нужно сохранить в другое место
+    global scene_file_path
+    path, _ = QtWidgets.QFileDialog.getSaveFileName(
+        main_window, "Save Scene As", scene_file_path or "", "AMS Scene (*.ams)"
+    )
+    if not path:
+        return
+    scene_file_path = path  # ← обновляем "текущую сцену"
+    update_window_title()
+    save_scene()
+
+
 
 
 def load_scene():
+    global scene_file_path
     path, _ = QtWidgets.QFileDialog.getOpenFileName(
-        main_window, "Load Scene", "", "AMS Scene (*.ams)"
+        main_window, "Load Scene", "", "AMS or RZI Scene (*.ams *.rzi)"
     )
     if not path:
         return
     try:
-        data = AMUtilities.load_scene(path)
+        data = AMUtilities.load_scene_any(path)
         main_window.image_paths = data.get("image_paths", [])
         main_window.locators = data.get("locators", [])
         main_window.images = AMUtilities.load_images(main_window.image_paths)
         main_window.selected_locator = None
         main_window.image_errors = {}
+
+        scene_file_path = path
+        update_window_title()
+
         update_tree()
         if main_window.images:
             show_image(0)
         else:
             main_window.viewer._pixmap.setPixmap(QtGui.QPixmap())
             main_window.viewer.set_markers([])
-        QtWidgets.QMessageBox.information(main_window, "Load", "Scene loaded successfully.")
+
     except Exception as e:
         import traceback
         QtWidgets.QMessageBox.critical(
             main_window, "Load Failed", f"{e}\n{traceback.format_exc()}"
         )
+
+
 
 
 
